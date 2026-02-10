@@ -1,91 +1,117 @@
 # ROADMAP.md
 
-This roadmap is aligned with `Project-B.pdf` and `project_B_guidelines.md`. It is intentionally time-agnostic and focuses on durable gates and compliance.
+This roadmap is aligned with `Project-B.pdf`, `project_B_guidelines.md`, and `AGENTS.md`.
 
-## Milestone 0: Requirements Baseline
+## Status Snapshot
 
-- Read and agree on the minimal scope (task queue, zone access control, health monitor).
+- Core scope implementation: complete
+- Required build/test gates: complete
+- Deterministic demo evidence path: complete
+- Documentation for grading workflow: complete
+- Optional hardening and polish: open
+
+## Milestone 0: Requirements Baseline (Complete)
+
+Goals:
+
+- Lock the minimal scope (task queue, zone access control, health monitor).
 - Record non-goals (no preemption, deadlock prevention, complex scheduling).
 - Define invariants and demo success criteria.
 
-Exit criteria:
+Exit criteria met:
 
-- Team consensus on scope, non-goals, and required demo behaviors.
+- Requirements and invariants are captured in project docs.
 
-## Milestone 1: Architecture and Interfaces
+## Milestone 1: Architecture and Interfaces (Complete)
 
-- Define data models for tasks, robots, zones, and health status.
-- Decide thread ownership and shared-state boundaries.
-- Choose synchronization primitives per component.
-- Draft module layout for clarity and reporting.
+Goals:
 
-Exit criteria:
+- Define task, robot, and zone identifiers and task model.
+- Separate core modules for queue, zones, and health monitoring.
+- Keep ownership boundaries clear and synchronization explicit.
 
-- A clear module interface map and an architecture diagram ready for the report.
+Exit criteria met:
 
-## Milestone 2: Core Implementation
+- Readable module structure in `src/`.
+- Architecture represented in `DIAGRAMS.md`.
 
-- Implement a thread-safe task queue with safe fetch/consume semantics.
-- Implement zone access control with strict mutual exclusion.
-- Implement health monitoring with heartbeat tracking and timeout detection.
-- Add a minimal simulation runner that spawns multiple robot threads.
+## Milestone 2: Core Implementation (Complete)
 
-Exit criteria:
+Goals:
 
-- The system can run a basic scenario that exercises all three components.
+- Implement synchronized task queue with safe blocking behavior.
+- Implement strict mutual exclusion for zone occupancy.
+- Implement timeout-based offline detection for robot heartbeats.
+- Implement simulation runners for demo/benchmark/stress.
 
-## Milestone 3: Correctness Tests
+Exit criteria met:
 
-- Unit tests for task queue safety and single-consumer behavior.
-- Concurrency tests for zone exclusivity.
-- Timeout/offline detection tests for the health monitor.
+- All three mandatory components are implemented and integrated.
 
-Exit criteria:
+## Milestone 3: Correctness Tests (Complete)
 
-- `cargo test` passes and core concurrency properties are validated.
+Goals:
 
-## Milestone 4: Observability and Benchmarking
+- Unit tests for task single-consumer semantics and queue shutdown behavior.
+- Concurrency test for zone exclusivity under contention.
+- Health monitor timeout and offline-clearing tests.
+- Integration test for grader-visible demo summary outputs.
 
-- Add clear logging or output that demonstrates synchronization behavior.
-- Produce benchmark data: throughput, zone latency, CPU usage.
-- Run scalability and stress tests (vary robot/task counts).
+Exit criteria met:
 
-Exit criteria:
+- `cargo test` passes.
+- Demo integration tests validate deterministic offline target reporting.
 
-- Data and artifacts exist to support the Benchmark section of the report.
+## Milestone 4: Observability and Benchmarking (Complete)
 
-## Milestone 5: Demo Readiness
+Goals:
 
-- Prepare a deterministic demo flow:
-  - system overview
-  - concurrent run
-  - synchronization code walkthrough
-- Ensure terminal output is readable and clearly shows required behaviors.
+- Emit demo summary fields for grading visibility.
+- Emit benchmark/stress CSV for throughput, latency, CPU, and safety flags.
+- Support validation mode for runtime integrity checks.
 
-Exit criteria:
+Exit criteria met:
 
-- A reliable 3-minute demo script that shows all required behaviors.
+- Demo/bench/stress commands run with clear, parseable output.
+- Safety flags (`zone_violation`, `duplicate_tasks`) are surfaced in CSV.
 
-## Milestone 6: Report Completion
+## Milestone 5: Demo Readiness (Complete)
 
-- Fill all required sections with correct word counts.
-- Include architecture diagram, synchronization rationale, and benchmark results.
-- Assemble at least 20 APA references (Rust docs, papers, technical articles).
+Goals:
 
-Exit criteria:
+- Ensure required behaviors are observable in a short runtime.
+- Make offline demonstration deterministic for grading confidence.
 
-- Report complies with all structural and content requirements.
+Exit criteria met:
+
+- Demo summary includes:
+  - `zone_violation=false`
+  - `offline_target=1`
+  - `offline_target_detected=true`
+  - `offline_robots={1}`
+
+## Milestone 6: Report Readiness (In Progress)
+
+Goals:
+
+- Keep report structure aligned with required sections and constraints.
+- Maintain benchmark narrative consistent with current CLI behavior.
+
+Current state:
+
+- Report draft exists in `written_report_draft.tex`.
+- Section length thresholds are currently satisfied.
+- Reference list meets the minimum count requirement.
 
 ## Quality Gates (Always On)
 
 - Build: `cargo build --release` succeeds.
-- Tests: `cargo test` passes.
-- Concurrency correctness: shared state remains consistent.
-- Demo compliance: all three required behaviors are visible.
+- Tests: `cargo test` succeeds.
+- Demo: required three behaviors are visible.
+- Synchronization correctness: no race-indicative violations in provided tests/runs.
 
-## Risks and Mitigations
+## Optional Next Improvements
 
-- **Race conditions**: minimize shared state, guard with locks, stress-test.
-- **Deadlocks**: keep lock ordering consistent and critical sections short.
-- **Non-deterministic tests**: use timeouts and controlled schedules.
-- **Demo fragility**: use deterministic scenarios and clear logging.
+- Add benchmark/stress mode tests that distinguish intentional offline targets from natural post-work timeouts.
+- Export example benchmark/stress outputs as versioned artifacts for report reproducibility.
+- Add lightweight CI workflow to run build + tests on push.
