@@ -9,8 +9,10 @@ fn run_demo_stdout() -> String {
         .expect("failed to run demo binary");
     assert!(
         output.status.success(),
-        "demo exited with non-zero status: {:?}",
-        output.status
+        "demo exited with non-zero status: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

@@ -385,7 +385,10 @@ pub fn run_demo() {
     let tasks_per_robot = 3;
     let zones_total = 2;
     let offline_target = DEMO_OFFLINE_TARGET_ROBOT;
-    debug_assert!((offline_target as usize) < robots, "offline target out of range");
+    assert!(
+        (offline_target as usize) < robots,
+        "offline target {offline_target} out of range for robots={robots}"
+    );
 
     // Track per-robot completions for the final summary.
     let per_robot_tasks = Arc::new((0..robots).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
