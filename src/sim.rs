@@ -14,7 +14,8 @@ use crate::zones::ZoneAccess;
 
 // Demo/offline timing knobs (small for quick CLI feedback).
 const DEMO_OFFLINE_TIMEOUT_MS: u64 = 200;
-const DEMO_OFFLINE_MAX_WAIT_MS: u64 = 600;
+const DEMO_OFFLINE_MAX_WAIT_MS: u64 = 1000;
+const DEMO_OFFLINE_TARGET_ROBOT: u64 = 1;
 // Benchmark offline timing (looser to reduce false positives).
 const BENCH_OFFLINE_TIMEOUT_MS: u64 = 500;
 const BENCH_OFFLINE_MAX_WAIT_MS: u64 = 1000;
@@ -89,6 +90,34 @@ fn wait_for_offline(monitor: &HealthMonitor, timeout_ms: u64, max_wait_ms: u64) 
     loop {
         if monitor.detect_offline_any(timeout) || start.elapsed() >= max_wait {
             return;
+        }
+        thread::sleep(poll);
+    }
+}
+
+/// Wait for a specific robot to be marked offline while keeping others alive.
+fn wait_for_specific_offline(
+    monitor: &HealthMonitor,
+    target_robot: u64,
+    keepalive_robots: &[u64],
+    timeout_ms: u64,
+    max_wait_ms: u64,
+) -> bool {
+    let max_wait = Duration::from_millis(max_wait_ms);
+    let poll = Duration::from_millis(OFFLINE_POLL_MS);
+    let timeout = Duration::from_millis(timeout_ms);
+    let start = Instant::now();
+    loop {
+        // Keep non-target robots fresh so demo output is deterministic.
+        for &robot in keepalive_robots {
+            monitor.heartbeat(robot);
+        }
+        let offline = monitor.detect_offline(timeout);
+        if offline.contains(&target_robot) {
+            return true;
+        }
+        if start.elapsed() >= max_wait {
+            return false;
         }
         thread::sleep(poll);
     }
@@ -355,6 +384,11 @@ pub fn run_demo() {
     let robots = 3;
     let tasks_per_robot = 3;
     let zones_total = 2;
+    let offline_target = DEMO_OFFLINE_TARGET_ROBOT;
+    assert!(
+        (offline_target as usize) < robots,
+        "offline target {offline_target} out of range for robots={robots}"
+    );
 
     // Track per-robot completions for the final summary.
     let per_robot_tasks = Arc::new((0..robots).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
@@ -409,8 +443,12 @@ pub fn run_demo() {
             .name(name.clone())
             .spawn(move || {
                 let mut completed = 0;
-                // Robot 1 stops heartbeats mid-demo to trigger offline detection.
-                let stop_heartbeat_after = if robot_id == 1 { 2 } else { usize::MAX };
+                // One fixed robot stops heartbeats mid-demo to trigger deterministic offline detection.
+                let stop_heartbeat_after = if robot_id as u64 == offline_target {
+                    2
+                } else {
+                    usize::MAX
+                };
                 while completed < tasks_per_robot {
                     let task = queue.pop_blocking_or_closed().expect("task queue closed");
                     per_robot_tasks[robot_id].fetch_add(1, Ordering::SeqCst);
@@ -444,7 +482,16 @@ pub fn run_demo() {
     for handle in handles {
         handle.join().expect("robot thread panicked");
     }
-    wait_for_offline(&monitor, DEMO_OFFLINE_TIMEOUT_MS, DEMO_OFFLINE_MAX_WAIT_MS);
+    let keepalive_robots: Vec<u64> = (0..robots as u64)
+        .filter(|&robot| robot != offline_target)
+        .collect();
+    let offline_target_detected = wait_for_specific_offline(
+        &monitor,
+        offline_target,
+        &keepalive_robots,
+        DEMO_OFFLINE_TIMEOUT_MS,
+        DEMO_OFFLINE_MAX_WAIT_MS,
+    );
     stop_flag.store(true, Ordering::SeqCst);
     monitor_thread
         .join()
@@ -474,6 +521,8 @@ pub fn run_demo() {
         zone_metrics.max_occupancy()
     );
     println!("zone_violation={}", zone_metrics.has_violation());
+    println!("offline_target={offline_target}");
+    println!("offline_target_detected={offline_target_detected}");
     println!("offline_robots={:?}", offline);
 }
 

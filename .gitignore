@@ -44,3 +44,11 @@ $RECYCLE.BIN/
 *.iml
 *.ipr
 *.iws
+
+# LaTeX
+*.aux
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.log
