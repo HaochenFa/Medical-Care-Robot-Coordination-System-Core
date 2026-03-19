@@ -89,7 +89,8 @@ MCRoCS is organized around a CLI entry point and three execution modes (demo, be
     node distance=8mm and 12mm,
     box/.style={draw, rounded corners, align=center, inner sep=4pt, font=\small},
     decision/.style={draw, diamond, aspect=2.0, align=center, inner sep=1pt, font=\small},
-    arr/.style={-{Latex[length=2mm]}, thick}
+    arr/.style={-{Latex[length=2mm]}, thick},
+    darr/.style={-{Latex[length=2mm]}, thick, dashed}
   ]
     \node[box] (cli) {CLI\\\texttt{main.rs}};
     \node[decision, right=of cli] (mode) {Mode};
@@ -111,9 +112,12 @@ MCRoCS is organized around a CLI entry point and three execution modes (demo, be
     \draw[arr] (core) -- (tqsync);
     \draw[arr] (core) -- (zasync);
     \draw[arr] (core) -- (hmsync);
+    \node[box, below=of cli, text width=24mm] (log) {\texttt{log\_dev!}\\(debug only)};
+    \draw[darr] (demo) to[out=180, in=90] (log);
+    \draw[darr] (bench) to[out=180, in=0] (log);
   \end{tikzpicture}
   }
-  \caption{Architecture overview aligned with current CLI mode routing and shared synchronization components.}
+  \caption{Architecture overview aligned with current CLI mode routing and shared synchronization components. Dashed arrows indicate debug-only coupling (\texttt{log\_dev!} is a no-op in release builds).}
   \label{fig:architecture}
 \end{figure}
 
@@ -223,7 +227,7 @@ Tests ensure that robots are marked offline after timeouts and that a new heartb
     \node[box] (a) {Start demo\\(3 robots, 2 zones)};
     \node[box, below=of a] (b) {Spawn robot threads\\and monitor thread};
     \node[box, below=of b] (c) {Concurrent task fetch\\and zone acquire/release};
-    \node[box, below left=of c] (d) {Robot 1 stops heartbeats\\after cutoff};
+    \node[box, below left=of c] (d) {Robot 1 stops heartbeats\\after task 2 of 3};
     \node[box, below right=of c] (e) {Robots 0 and 2\\continue heartbeats};
     \node[box, below=10mm of c] (f) {Monitor polls\\\texttt{detect\_offline(timeout)}};
     \node[box, below=of f, text width=55mm] (g) {Main thread calls\\\texttt{wait\_for\_specific\_offline(1)}\\while sending keepalive heartbeats to non-target robots};
@@ -278,7 +282,7 @@ The measurement protocol separates safety evidence from performance evidence. Sa
   \node[box] (a) {Start benchmark/stress run};
   \node[decision, below=of a] (b) {offline-demo\\enabled?};
   \node[box, below left=of b] (c) {Normal run};
-  \node[box, below right=of b] (d) {Robot 0 stops\\heartbeats early};
+  \node[box, below right=of b] (d) {Robot 0 stops heartbeats\\after \texttt{tasks\_per\_robot/2}};
   \node[box, below=11mm of b] (e) {Workers finish tasks};
   \node[box, below=of e] (f) {wait\_for\_offline(any)};
   \node[box, below=of f] (g) {Collect\\offline\_robots count};

@@ -33,22 +33,26 @@ Explicit non-goals:
 
 - `src/task_queue.rs`
   - `TaskQueue`: `Mutex<VecDeque<Task>>` + `Condvar`
-  - Supports non-blocking and blocking task fetch
-  - Provides queue shutdown behavior (`close`)
+  - Supports non-blocking (`try_pop`) and blocking (`pop_blocking_or_closed`) task fetch
+  - Provides queue shutdown behavior (`close`) that unblocks all waiting consumers
 - `src/zones.rs`
   - `ZoneAccess`: `Mutex<HashMap<ZoneId, RobotId>>` + `Condvar`
-  - Enforces single-owner occupancy per zone
+  - Enforces single-owner occupancy per zone; `acquire` blocks until the zone is free
 - `src/health_monitor.rs`
   - `HealthMonitor`: `Mutex<HealthState>`
-  - Tracks `last_seen` and `offline` robot sets
+  - Tracks `last_seen` timestamps and `offline` robot set; polled by a background thread
 - `src/sim.rs`
-  - Demo runner (`run_demo`)
-  - Benchmark runner (`run_benchmark`)
-  - Stress sweep runner (`run_stress`)
+  - Demo runner (`run_demo`): 3 robots, 2 zones, deterministic offline target (robot 1)
+  - Benchmark runner (`run_benchmark`): single parameterized run, CSV output
+  - Stress sweep runner (`run_stress`): iterates robot/task/zone sets, CSV output
 - `src/main.rs`
-  - CLI parsing and argument validation
+  - CLI entry point; subcommands: _(no args)_ demo, `bench`, `stress`, `--help`
+- `src/logging.rs`
+  - `log_dev!` macro: debug-only structured logs (no-op in release builds)
+- `src/types.rs`
+  - Shared type aliases: `TaskId`, `RobotId`, `ZoneId`; `Task` struct
 - `tests/cli_demo.rs`
-  - Integration checks for grader-visible demo summary output
+  - Integration tests: verify demo summary fields, zone safety, and offline detection
 
 ## Concurrency and Safety Invariants
 
@@ -223,10 +227,12 @@ Platform note:
 project_blaze/
 |-- Cargo.toml
 |-- README.md
-|-- ROADMAP.md
 |-- DIAGRAMS.md
+|-- CLAUDE.md
+|-- AGENTS.md
 |-- project_B_guidelines.md
 |-- Project-B.pdf
+|-- written_report_draft.tex
 |-- src/
 |   |-- main.rs
 |   |-- sim.rs
@@ -239,10 +245,9 @@ project_blaze/
     `-- cli_demo.rs
 ```
 
-## Diagrams and Roadmap
+## Diagrams
 
 - Architecture and flow diagrams: `DIAGRAMS.md`
-- Milestones and compliance gates: `ROADMAP.md`
 
 ## Notes
 
