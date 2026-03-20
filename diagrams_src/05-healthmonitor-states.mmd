@@ -1,0 +1,5 @@
+stateDiagram-v2
+    [*] --> Unregistered
+    Unregistered --> Online: register_robot() or heartbeat()
+    Online --> Offline: detect_offline() marks overdue robot
+    Offline --> Online: heartbeat() clears offline mark

@@ -1,0 +1,9 @@
+flowchart TD
+    A["Start benchmark/stress run"] --> B{"offline-demo flag?"}
+    B -- "no" --> C["All robots send heartbeats throughout<br/>(no background monitor thread spawned)"]
+    B -- "yes" --> D["Spawn background monitor thread<br/>Robot 0 stops heartbeats after<br/>tasks_per_robot/2"]
+    C --> E["Workers finish all tasks"]
+    D --> E
+    E --> F["wait_for_offline(any, 500ms timeout, 1000ms max)"]
+    F --> G["Collect offline_robots count"]
+    G --> H["Emit formatted table row"]

@@ -1,0 +1,15 @@
+flowchart TD
+    P["Producer calls push(task)"] --> LOCK1["Lock Mutex"]
+    LOCK1 --> CLOSED{"queue closed?"}
+    CLOSED -- "yes" --> ERR["Return Err(task)"]
+    CLOSED -- "no" --> ENQUEUE["push_back to VecDeque"]
+    ENQUEUE --> NOTIFY["notify_one (wake a consumer)"]
+    NOTIFY --> UNLOCK1["Unlock Mutex"]
+
+    C["Consumer calls pop_blocking_or_closed()"] --> LOCK2["Lock Mutex"]
+    LOCK2 --> CHECK{"task available?"}
+    CHECK -- "yes" --> POP["pop_front, return Some(task)"]
+    CHECK -- "no" --> ISCLOSE{"queue closed?"}
+    ISCLOSE -- "yes" --> NONE["Return None"]
+    ISCLOSE -- "no" --> WAIT["Condvar::wait (releases lock)"]
+    WAIT --> CHECK

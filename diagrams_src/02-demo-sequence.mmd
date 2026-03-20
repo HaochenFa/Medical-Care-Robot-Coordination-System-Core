@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant R0 as Robot 0
+    participant R1 as Robot 1 (offline target)
+    participant R2 as Robot 2
+    participant Q as TaskQueue
+    participant Z as ZoneAccess
+    participant H as HealthMonitor
+    participant M as Monitor Thread
+    participant Main as Main Thread
+
+    par Robots fetch tasks concurrently (3 tasks each)
+        R0->>Q: pop_blocking_or_closed()
+        R1->>Q: pop_blocking_or_closed()
+        R2->>Q: pop_blocking_or_closed()
+    end
+
+    note over Z: zone = (task.id % 2) + 1<br/>so only zones 1 and 2 exist
+
+    R0->>Z: acquire(zone)
+    R1->>Z: acquire(zone)
+    R2->>Z: acquire(zone)
+    Z-->>R0: granted (blocks if zone busy)
+    Z-->>R1: granted (blocks if zone busy)
+    Z-->>R2: granted (blocks if zone busy)
+
+    R0->>H: heartbeat() after each task
+    R1->>H: heartbeat() after tasks 1 and 2 only
+    R2->>H: heartbeat() after each task
+
+    M->>H: detect_offline(200ms) every 50ms
+
+    note over R1: stops heartbeats after<br/>task 2 completed
+
+    note over Main: all robot threads join,<br/>then...
+    Main->>H: keepalive heartbeats for robots 0 and 2
+    Main->>H: wait_for_specific_offline(target=1, timeout=200ms)
+    H-->>Main: robot 1 offline detected

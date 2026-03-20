@@ -1,0 +1,23 @@
+flowchart TD
+    CLI["CLI (main.rs)"] --> MODE{"Subcommand"}
+    MODE --> DEMO["run_demo()"]
+    MODE --> BENCH["run_benchmark()"]
+    MODE --> STRESS["run_stress()"]
+
+    DEMO --> TQ["TaskQueue"]
+    DEMO --> ZA["ZoneAccess"]
+    DEMO --> HM["HealthMonitor"]
+
+    BENCH --> TQ
+    BENCH --> ZA
+    BENCH --> HM
+
+    STRESS --> BENCH
+
+    TQ --> TQSYNC["Mutex&lt;VecDeque&lt;Task&gt;&gt; + Condvar"]
+    ZA --> ZASYNC["Mutex&lt;Vec&lt;Option&lt;RobotId&gt;&gt;&gt; + Vec&lt;Condvar&gt; (1-indexed per zone)"]
+    HM --> HMSYNC["Mutex&lt;HealthState&gt; where HealthState = { heartbeats: HashMap, offline: HashSet }"]
+
+    LOG["log_dev! macro (debug builds only)"]
+    DEMO -.-> LOG
+    BENCH -.-> LOG

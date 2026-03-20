@@ -1,0 +1,15 @@
+flowchart TD
+    A["Robot calls acquire(zone, robot)"] --> LOCK["Lock Mutex"]
+    LOCK --> IDX["Validate zone and use 1-indexed slot"]
+    IDX --> OCC{"occupied[zone] is None?"}
+    OCC -- "yes" --> INSERT["Set occupied[zone] = Some(robot_id)"]
+    INSERT --> UNLOCK_A["Unlock, return"]
+    OCC -- "no" --> WAIT["condvars[zone].wait (releases lock)"]
+    WAIT --> OCC
+
+    R["Robot calls release(zone, robot)"] --> LOCKR["Lock Mutex"]
+    LOCKR --> OWNER{"occupied[zone] == Some(robot)?"}
+    OWNER -- "yes" --> REMOVE["Set occupied[zone] = None"]
+    REMOVE --> NOTIFYONE["condvars[zone].notify_one (wake one waiter)"]
+    NOTIFYONE --> UNLOCK_R["Unlock, return true"]
+    OWNER -- "no / unoccupied" --> FALSE["return false (caller error)"]
