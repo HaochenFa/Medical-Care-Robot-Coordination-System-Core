@@ -377,10 +377,10 @@ fn benchmark_once(
 /// Run the default demo showing queueing, zoning, and offline detection.
 pub fn run_demo() {
     crate::logging::init_demo_start();
-    println!("{BOLD}{CYAN}╔══════════════════════════════╗{RESET}");
-    println!("{BOLD}{CYAN}║   Project Blaze — Demo       ║{RESET}");
-    println!("{BOLD}{CYAN}║   robots=3  zones=2  tasks=9 ║{RESET}");
-    println!("{BOLD}{CYAN}╚══════════════════════════════╝{RESET}");
+    println!("{BOLD}{CYAN}╔════════════════════════════════════════════════════════════╗{RESET}");
+    println!("{BOLD}{CYAN}║                    Project Blaze — Demo                    ║{RESET}");
+    println!("{BOLD}{CYAN}║                  robots=3  zones=2  tasks=9                ║{RESET}");
+    println!("{BOLD}{CYAN}╚════════════════════════════════════════════════════════════╝{RESET}");
     println!();
     log_dev!("[DEMO] start");
 
@@ -508,7 +508,7 @@ pub fn run_demo() {
 
     let occupied = zones.occupied_zones();
     if cfg!(debug_assertions) {
-        println!("{GRAY}  ─────────────────────────────{RESET}");
+        println!("{GRAY}  ────────────────────────────────────────────────────────────{RESET}");
     }
     log_dev!("[ZONE] occupied_zones at end = {}", occupied.len());
     let offline = monitor.offline_robots();
@@ -541,7 +541,7 @@ pub fn run_demo() {
         format!("{RED}{offline:?}{RESET}")
     };
     // Inner box width (visible chars between the two ║).
-    const W: usize = 30;
+    const W: usize = 60;
     // Build a padded row: ║  label<16 value_colored pad ║
     let row = |label: &str, value_colored: &str, value_plain: &str| -> String {
         // label is printed with a fixed 16-char field; recompute using that
@@ -551,9 +551,9 @@ pub fn run_demo() {
         format!("{BOLD}║{RESET}  {label_field}{value_colored}{}{BOLD}║{RESET}", " ".repeat(pad))
     };
     println!();
-    println!("{BOLD}╔══════════════════════════════╗{RESET}");
-    println!("{BOLD}║       DEMO SUMMARY           ║{RESET}");
-    println!("{BOLD}╠══════════════════════════════╣{RESET}");
+    println!("{BOLD}╔════════════════════════════════════════════════════════════╗{RESET}");
+    println!("{BOLD}║                        DEMO SUMMARY                        ║{RESET}");
+    println!("{BOLD}╠════════════════════════════════════════════════════════════╣{RESET}");
     println!("{}", row("robots",        &format!("{CYAN}{robots}{RESET}"),                          &robots.to_string()));
     println!("{}", row("tasks_total",   &format!("{CYAN}{}{RESET}", robots * tasks_per_robot),      &(robots * tasks_per_robot).to_string()));
     println!("{}", row("per_robot_done",&format!("{CYAN}{tasks_done:?}{RESET}"),                    &format!("{tasks_done:?}")));
@@ -562,7 +562,7 @@ pub fn run_demo() {
     println!("{}", row("offline_target",&format!("{YELLOW}{offline_target}{RESET}"),                &offline_target.to_string()));
     println!("{}", row("detected",      &det_str,                                                   if offline_target_detected { "✓ true" } else { "✗ false" }));
     println!("{}", row("offline_robots",&offline_str,                                               &if offline.is_empty() { "none".to_string() } else { format!("{offline:?}") }));
-    println!("{BOLD}╚══════════════════════════════╝{RESET}");
+    println!("{BOLD}╚════════════════════════════════════════════════════════════╝{RESET}");
 }
 
 /// Run a single benchmark with optional parameter overrides.
