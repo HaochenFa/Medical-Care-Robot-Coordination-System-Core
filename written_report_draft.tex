@@ -86,38 +86,60 @@ MCRoCS is organized around a CLI entry point and three execution modes (demo, be
   \centering
   \resizebox{\linewidth}{!}{%
   \begin{tikzpicture}[
-    node distance=8mm and 12mm,
     box/.style={draw, rounded corners, align=center, inner sep=4pt, font=\small},
     decision/.style={draw, diamond, aspect=2.0, align=center, inner sep=1pt, font=\small},
     arr/.style={-{Latex[length=2mm]}, thick},
     darr/.style={-{Latex[length=2mm]}, thick, dashed}
   ]
-    \node[box] (cli) {CLI\\\texttt{main.rs}};
-    \node[decision, right=of cli] (mode) {Mode};
-    \node[box, above right=of mode] (demo) {Demo\\\texttt{run\_demo()}};
-    \node[box, right=of mode] (bench) {Benchmark\\\texttt{run\_benchmark()}};
-    \node[box, below right=of mode] (stress) {Stress\\\texttt{run\_stress()}};
-    \node[box, right=34mm of bench, text width=38mm] (core) {Core services\\TaskQueue\\ZoneAccess\\HealthMonitor};
-    \node[box, below left=of core, text width=34mm] (tqsync) {TaskQueue sync\\Mutex + Condvar\\(VecDeque)};
-    \node[box, below=of core, text width=34mm] (zasync) {ZoneAccess sync\\Mutex + Condvar\\(owner map)};
-    \node[box, below right=of core, text width=34mm] (hmsync) {HealthMonitor sync\\RwLock + Mutex\\(heartbeats + offline)};
+    % Entry and routing
+    \node[box] (cli) at (0,0) {CLI\\\texttt{main.rs}};
+    \node[decision] (mode) at (2.4,0) {Mode};
+    \node[box] (demo)   at (5.0,  1.7) {Demo\\\texttt{run\_demo()}};
+    \node[box] (bench)  at (5.0,  0.0) {Benchmark\\\texttt{run\_benchmark()}};
+    \node[box] (stress) at (5.0, -1.7) {Stress\\\texttt{run\_stress()}};
+    \node[box, text width=22mm] (log) at (0, -2.4) {\texttt{log\_dev!}\\(debug only)};
 
-    \draw[arr] (cli) -- (mode);
+    % Three separate service nodes
+    \node[box] (tq) at (9.0,  1.7) {TaskQueue};
+    \node[box] (za) at (9.0,  0.0) {ZoneAccess};
+    \node[box] (hm) at (9.0, -1.7) {HealthMonitor};
+
+    % Sync-detail nodes (one per service)
+    \node[box, text width=40mm] (tqsync) at (13.2,  1.7)
+      {\texttt{Mutex\textless VecDeque\textless Task\textgreater\textgreater}\\+ Condvar};
+    \node[box, text width=42mm] (zasync) at (13.2,  0.0)
+      {\texttt{Mutex\textless HashMap\textgreater}\\+ Vec\textless Condvar\textgreater\ (per-zone)};
+    \node[box, text width=42mm] (hmsync) at (13.2, -1.7)
+      {\texttt{RwLock\textless HashMap\textgreater} (heartbeats)\\+ \texttt{Mutex\textless HashSet\textgreater} (offline)};
+
+    % Routing arrows
+    \draw[arr] (cli)  -- (mode);
     \draw[arr] (mode) -- (demo);
     \draw[arr] (mode) -- (bench);
     \draw[arr] (mode) -- (stress);
     \draw[arr] (stress) -- (bench);
-    \draw[arr] (demo) -- (core);
-    \draw[arr] (bench) -- (core);
-    \draw[arr] (core) -- (tqsync);
-    \draw[arr] (core) -- (zasync);
-    \draw[arr] (core) -- (hmsync);
-    \node[box, below=of cli, text width=24mm] (log) {\texttt{log\_dev!}\\(debug only)};
-    \draw[darr] (demo) to[out=180, in=90] (log);
-    \draw[darr] (bench) to[out=180, in=0] (log);
+
+    % Demo → each service
+    \draw[arr] (demo) -- (tq);
+    \draw[arr] (demo) -- (za);
+    \draw[arr] (demo) -- (hm);
+
+    % Bench → each service
+    \draw[arr] (bench) -- (tq);
+    \draw[arr] (bench) -- (za);
+    \draw[arr] (bench) -- (hm);
+
+    % Service → sync detail
+    \draw[arr] (tq) -- (tqsync);
+    \draw[arr] (za) -- (zasync);
+    \draw[arr] (hm) -- (hmsync);
+
+    % Debug-only log coupling (dashed)
+    \draw[darr] (demo.west)  to[out=200, in=80]  (log.north);
+    \draw[darr] (bench.west) to[out=210, in=10]  (log.east);
   \end{tikzpicture}
   }
-  \caption{Architecture overview aligned with current CLI mode routing and shared synchronization components. Dashed arrows indicate debug-only coupling (\texttt{log\_dev!} is a no-op in release builds).}
+  \caption{Architecture overview: CLI routes to execution mode; \texttt{run\_demo()} and \texttt{run\_benchmark()} each use all three core services independently. \texttt{run\_stress()} delegates to \texttt{run\_benchmark()}. Each service has its own synchronization primitive (shown at right). Dashed arrows indicate debug-only coupling (\texttt{log\_dev!} is a no-op in release builds).}
   \label{fig:architecture}
 \end{figure}
 
@@ -139,6 +161,55 @@ pub fn pop_blocking_or_closed(&self) -> Option<Task> {
     }
 }
 \end{lstlisting}
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    node distance=7mm and 10mm,
+    box/.style={draw, rounded corners, align=center, inner sep=4pt, font=\small},
+    decision/.style={draw, diamond, aspect=2.2, align=center, inner sep=1pt, font=\small},
+    arr/.style={-{Latex[length=2mm]}, thick}
+  ]
+    %% ---- Left column: Producer (push) ----
+    \node[box] (p0) at (-3.2, 0)    {\textbf{Producer}\\\texttt{push(task)}};
+    \node[box] (p1) at (-3.2,-1.2)  {Lock Mutex};
+    \node[decision] (p2) at (-3.2,-2.6) {closed?};
+    \node[box] (p3) at (-5.2,-4.0)  {Return\\Err(task)};
+    \node[box] (p4) at (-1.8,-4.0)  {push\_back\\to VecDeque};
+    \node[box] (p5) at (-1.8,-5.3)  {notify\_one};
+    \node[box] (p6) at (-1.8,-6.6)  {Unlock};
+
+    \draw[arr] (p0) -- (p1);
+    \draw[arr] (p1) -- (p2);
+    \draw[arr] (p2) -- node[above left, font=\small]{yes} (p3);
+    \draw[arr] (p2) -- node[above right, font=\small]{no}  (p4);
+    \draw[arr] (p4) -- (p5);
+    \draw[arr] (p5) -- (p6);
+
+    %% ---- Right column: Consumer (pop_blocking_or_closed) ----
+    \node[box] (c0) at (3.5, 0)    {\textbf{Consumer}\\\texttt{pop\_blocking\_or\_closed()}};
+    \node[box] (c1) at (3.5,-1.2)  {Lock Mutex};
+    \node[decision] (c2) at (3.5,-2.6) {task\\available?};
+    \node[box] (c3) at (1.4,-4.0)  {pop\_front\\return Some(task)};
+    \node[decision] (c4) at (5.0,-4.0) {closed?};
+    \node[box] (c5) at (3.8,-5.3)  {return None};
+    \node[box] (c6) at (6.4,-5.3)  {Condvar::wait\\(releases lock)};
+
+    \draw[arr] (c0) -- (c1);
+    \draw[arr] (c1) -- (c2);
+    \draw[arr] (c2) -- node[above left, font=\small]{yes} (c3);
+    \draw[arr] (c2) -- node[above right, font=\small]{no}  (c4);
+    \draw[arr] (c4) -- node[above left, font=\small]{yes}  (c5);
+    \draw[arr] (c4) -- node[above right, font=\small]{no}  (c6);
+    % wait loops back to the task-available check
+    \draw[arr] (c6.east) -- ++(0.5,0) |- (c2.east);
+
+    %% ---- Vertical separator ----
+    \draw[dashed, gray] (0, 0.6) -- (0, -7.0);
+  \end{tikzpicture}
+  \caption{TaskQueue producer and consumer paths: \texttt{push} notifies one consumer; blocking \texttt{pop\_blocking\_or\_closed} waits until a task arrives or the queue closes.}
+  \label{fig:tq-flow}
+\end{figure}
 
 The queue also supports \texttt{try\_pop} for non-blocking access and a \texttt{close} operation that wakes all blocked consumers. Tests validate that tasks are consumed exactly once across multiple threads, that blocking consumers wake on push, and that closure unblocks waiting threads. These tests directly target the invariants required by the project: single assignment of tasks and safe concurrent access.
 
@@ -177,7 +248,7 @@ This approach keeps the lock scope short and avoids deadlocks because only one l
     \node[box, below=of c] (e) {Robot performs work};
     \node[box, below=of e] (f) {Release by owner};
     \node[box, below=of f] (g) {Remove owner\\entry};
-    \node[box, below=of g] (h) {Notify waiters};
+    \node[box, below=of g] (h) {notify\_one\\--- wake one waiter};
 
     \draw[arr] (a) -- (b);
     \draw[arr] (b) -- node[above left]{no} (c);
@@ -217,36 +288,111 @@ pub fn detect_offline(&self, timeout: Duration) -> HashSet<RobotId> {
 }
 \end{lstlisting}
 
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    state/.style={draw, circle, minimum size=22mm, align=center, font=\small},
+    arr/.style={-{Latex[length=2mm]}, thick}
+  ]
+    % States
+    \node[state] (unreg)   at (0,   0)  {Unregistered};
+    \node[state] (online)  at (5.0, 0)  {Online};
+    \node[state] (offline) at (10.0, 0) {Offline};
+
+    % Initial pseudo-state
+    \node[draw, fill, circle, minimum size=3mm, inner sep=0pt] (init) at (-2.2, 0) {};
+    \draw[arr] (init) -- (unreg);
+
+    % Unregistered → Online
+    \draw[arr] (unreg) -- node[above, font=\small]
+      {\texttt{register\_robot()} or \texttt{heartbeat()}} (online);
+
+    % Online self-loop (top)
+    \draw[arr] (online) to[out=60, in=120, looseness=5]
+      node[above, font=\small] {\texttt{heartbeat()} — resets timestamp} (online);
+
+    % Online → Offline
+    \draw[arr] (online) to[out=-30, in=210]
+      node[above, font=\small] {\texttt{detect\_offline()} — heartbeat expired}
+      (offline);
+
+    % Offline → Online
+    \draw[arr] (offline) to[out=150, in=30]
+      node[below, font=\small] {\texttt{heartbeat()} — clears offline mark}
+      (online);
+  \end{tikzpicture}
+  \caption{HealthMonitor robot state transitions. A robot enters \textit{Online} on first heartbeat, transitions to \textit{Offline} when \texttt{detect\_offline()} finds its timestamp overdue, and recovers to \textit{Online} on the next heartbeat.}
+  \label{fig:hm-states}
+\end{figure}
+
 Tests ensure that robots are marked offline after timeouts and that a new heartbeat clears the offline status. A test-only hook allows deterministic verification without sleeping, preventing flaky test behavior.
 
 \subsection{Simulation and CLI}
 
-\begin{figure}[h]
+\begin{figure}[H]
   \centering
+  \resizebox{0.97\linewidth}{!}{%
   \begin{tikzpicture}[
-    node distance=9mm and 12mm,
-    box/.style={draw, rounded corners, align=center, inner sep=4pt, font=\small},
-    arr/.style={-{Latex[length=2mm]}, thick}
+    arr/.style={-{Latex[length=2mm]}, thick},
+    note/.style={draw, rounded corners, align=center, inner sep=3pt, font=\small, fill=white},
+    tl/.style={dashed, gray}
   ]
-    \node[box] (a) {Start demo\\(3 robots, 2 zones)};
-    \node[box, below=of a] (b) {Spawn robot threads\\and monitor thread};
-    \node[box, below=of b] (c) {Concurrent task fetch\\and zone acquire/release};
-    \node[box, below left=of c] (d) {Robot 1 stops heartbeats\\after task 2 of 3};
-    \node[box, below right=of c] (e) {Robots 0 and 2\\continue heartbeats};
-    \node[box, below=10mm of c] (f) {Monitor polls\\\texttt{detect\_offline(timeout)}};
-    \node[box, below=of f, text width=55mm] (g) {Main thread calls\\\texttt{wait\_for\_specific\_offline(1)}\\while sending keepalive heartbeats to non-target robots};
-    \node[box, below=of g] (h) {Summary: \texttt{offline\_target=1}\\and \texttt{offline\_target\_detected=true}};
+    % Participant headers
+    \node[font=\small\bfseries, align=center] at (0,    0.7) {Robot 0\\Robot 2};
+    \node[font=\small\bfseries, align=center] at (2.6,  0.7) {Robot 1\\(offline target)};
+    \node[font=\small\bfseries, align=center] at (5.6,  0.7) {TaskQueue /\\ZoneAccess};
+    \node[font=\small\bfseries, align=center] at (8.4,  0.7) {Health\\Monitor};
+    \node[font=\small\bfseries, align=center] at (11.0, 0.7) {Main\\Thread};
 
-    \draw[arr] (a) -- (b);
-    \draw[arr] (b) -- (c);
-    \draw[arr] (c) -- (d);
-    \draw[arr] (c) -- (e);
-    \draw[arr] (d) -- (f);
-    \draw[arr] (e) -- (g);
-    \draw[arr] (f) -- (g);
-    \draw[arr] (g) -- (h);
+    % Timelines
+    \draw[tl] (0,    0) -- (0,    -11.2);
+    \draw[tl] (2.6,  0) -- (2.6,  -11.2);
+    \draw[tl] (5.6,  0) -- (5.6,  -11.2);
+    \draw[tl] (8.4,  0) -- (8.4,  -11.2);
+    \draw[tl] (11.0, 0) -- (11.0, -11.2);
+
+    % par block bracket
+    \draw[dashed, thin] (-0.6, -0.5) rectangle (6.2, -2.2);
+    \node[font=\scriptsize\itshape, anchor=north west] at (-0.55, -0.55) {par};
+
+    % 1. Concurrent pop_blocking_or_closed
+    \draw[arr] (0,   -1.1) -- node[above, font=\scriptsize] {\texttt{pop\_blocking\_or\_closed()}} (5.6, -1.1);
+    \draw[arr] (2.6, -1.7) -- node[below, font=\scriptsize] {\texttt{pop\_blocking\_or\_closed()}} (5.6, -1.7);
+
+    % 2. acquire(zone)
+    \draw[arr] (0,   -3.0) -- node[above, font=\scriptsize] {\texttt{acquire(zone)} \textit{(blocks if busy)}} (5.6, -3.0);
+    \draw[arr] (2.6, -3.5) -- node[below, font=\scriptsize] {\texttt{acquire(zone)}} (5.6, -3.5);
+
+    % 3. R0/R2 heartbeat after each task
+    \draw[arr] (0,   -4.8) -- node[above, font=\scriptsize] {\texttt{heartbeat()} after each task} (8.4, -4.8);
+
+    % 4. R1 heartbeat — tasks 1 and 2 only
+    \draw[arr] (2.6, -5.5) -- node[above, font=\scriptsize] {\texttt{heartbeat()} after tasks 1 and 2 only} (8.4, -5.5);
+
+    % 5. R1 stops heartbeats note
+    \node[note] at (2.6, -6.4) {\scriptsize stops heartbeats\\[-1pt]\scriptsize after task 2};
+
+    % 6. detect_offline self-call on HM (right-side loop)
+    \draw[arr] (8.4, -7.1) to[out=-30, in=30, looseness=7]
+      node[right, font=\scriptsize, align=left] {\texttt{detect\_offline(200ms)}\\every 50ms} (8.4, -7.7);
+
+    % Divider: robot threads join
+    \draw[dotted, thick] (-0.4, -8.5) -- (11.4, -8.5);
+    \node[font=\scriptsize\itshape] at (5.5, -8.3) {robot threads join};
+
+    % 7. Main keepalive heartbeats for R0, R2
+    \draw[arr] (11.0, -9.2) -- node[above, font=\scriptsize] {\texttt{heartbeat()} keepalive for R0, R2} (8.4, -9.2);
+
+    % 8. wait_for_specific_offline
+    \draw[arr] (11.0, -10.2) -- node[above, font=\scriptsize]
+      {\texttt{wait\_for\_specific\_offline}(target=1, 200ms timeout)} (8.4, -10.2);
+
+    % 9. HM → Main: offline detected
+    \draw[arr] (8.4, -11.0) -- node[above, font=\scriptsize] {robot 1 offline detected} (11.0, -11.0);
+
   \end{tikzpicture}
-  \caption{Deterministic demo flow (TikZ): fixed offline target with non-target keepalive during final wait.}
+  }
+  \caption{Demo sequence: robots concurrently fetch tasks and acquire zones; Robot 1 stops heartbeats after task 2, triggering offline detection.}
   \label{fig:robot-sequence}
 \end{figure}
 
@@ -288,7 +434,7 @@ The measurement protocol separates safety evidence from performance evidence. Sa
   \node[box, below left=of b] (c) {Normal run};
   \node[box, below right=of b] (d) {Robot 0 stops heartbeats\\after \texttt{tasks\_per\_robot/2}};
   \node[box, below=11mm of b] (e) {Workers finish tasks};
-  \node[box, below=of e] (f) {wait\_for\_offline(any)};
+  \node[box, below=of e] (f) {wait\_for\_offline(any, 500ms)};
   \node[box, below=of f] (g) {Collect\\offline\_robots count};
   \node[box, below=of g] (h) {Emit CSV row};
 
