@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::health_monitor::HealthMonitor;
 use crate::log_dev;
+use crate::logging::{BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW};
 use crate::task_queue::TaskQueue;
 use crate::types::Task;
 use crate::zones::ZoneAccess;
@@ -375,6 +376,12 @@ fn benchmark_once(
 
 /// Run the default demo showing queueing, zoning, and offline detection.
 pub fn run_demo() {
+    crate::logging::init_demo_start();
+    println!("{BOLD}{CYAN}╔══════════════════════════════╗{RESET}");
+    println!("{BOLD}{CYAN}║   Project Blaze — Demo       ║{RESET}");
+    println!("{BOLD}{CYAN}║   robots=3  zones=2  tasks=9 ║{RESET}");
+    println!("{BOLD}{CYAN}╚══════════════════════════════╝{RESET}");
+    println!();
     log_dev!("[DEMO] start");
 
     let queue = Arc::new(TaskQueue::new());
@@ -404,6 +411,7 @@ pub fn run_demo() {
         robots * tasks_per_robot,
         tasks_per_robot
     );
+    if cfg!(debug_assertions) { println!(); }
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     for robot_id in 0..robots {
@@ -472,6 +480,7 @@ pub fn run_demo() {
                     } else {
                         log_dev!("[HEALTH] {name} stops heartbeats");
                     }
+                    if cfg!(debug_assertions) { println!(); }
                 }
             })
             .expect("failed to spawn robot thread");
@@ -498,6 +507,9 @@ pub fn run_demo() {
         .expect("health monitor thread panicked");
 
     let occupied = zones.occupied_zones();
+    if cfg!(debug_assertions) {
+        println!("{GRAY}  ─────────────────────────────{RESET}");
+    }
     log_dev!("[ZONE] occupied_zones at end = {}", occupied.len());
     let offline = monitor.offline_robots();
     log_dev!("[HEALTH] offline robots at end = {}", offline.len());
@@ -513,17 +525,44 @@ pub fn run_demo() {
         .iter()
         .map(|count| count.load(Ordering::SeqCst))
         .collect();
-    println!("DEMO SUMMARY");
-    println!("robots={robots} tasks_total={}", robots * tasks_per_robot);
-    println!("tasks_per_robot_done={:?}", tasks_done);
-    println!(
-        "max_zone_occupancy_observed={}",
-        zone_metrics.max_occupancy()
-    );
-    println!("zone_violation={}", zone_metrics.has_violation());
-    println!("offline_target={offline_target}");
-    println!("offline_target_detected={offline_target_detected}");
-    println!("offline_robots={:?}", offline);
+    let viol_str = if zone_metrics.has_violation() {
+        format!("{RED}✗ true{RESET}")
+    } else {
+        format!("{GREEN}✓ false{RESET}")
+    };
+    let det_str = if offline_target_detected {
+        format!("{GREEN}✓ true{RESET}")
+    } else {
+        format!("{RED}✗ false{RESET}")
+    };
+    let offline_str = if offline.is_empty() {
+        format!("{GRAY}none{RESET}")
+    } else {
+        format!("{RED}{offline:?}{RESET}")
+    };
+    // Inner box width (visible chars between the two ║).
+    const W: usize = 30;
+    // Build a padded row: ║  label<16 value_colored pad ║
+    let row = |label: &str, value_colored: &str, value_plain: &str| -> String {
+        // label is printed with a fixed 16-char field; recompute using that
+        let label_field = format!("{label:<16}");
+        let visible = 2 + label_field.len() + value_plain.chars().count();
+        let pad = W.saturating_sub(visible);
+        format!("{BOLD}║{RESET}  {label_field}{value_colored}{}{BOLD}║{RESET}", " ".repeat(pad))
+    };
+    println!();
+    println!("{BOLD}╔══════════════════════════════╗{RESET}");
+    println!("{BOLD}║       DEMO SUMMARY           ║{RESET}");
+    println!("{BOLD}╠══════════════════════════════╣{RESET}");
+    println!("{}", row("robots",        &format!("{CYAN}{robots}{RESET}"),                          &robots.to_string()));
+    println!("{}", row("tasks_total",   &format!("{CYAN}{}{RESET}", robots * tasks_per_robot),      &(robots * tasks_per_robot).to_string()));
+    println!("{}", row("per_robot_done",&format!("{CYAN}{tasks_done:?}{RESET}"),                    &format!("{tasks_done:?}")));
+    println!("{}", row("max_zone_occ",  &format!("{YELLOW}{}{RESET}", zone_metrics.max_occupancy()),&zone_metrics.max_occupancy().to_string()));
+    println!("{}", row("zone_violation",&viol_str,                                                  if zone_metrics.has_violation() { "✗ true" } else { "✓ false" }));
+    println!("{}", row("offline_target",&format!("{YELLOW}{offline_target}{RESET}"),                &offline_target.to_string()));
+    println!("{}", row("detected",      &det_str,                                                   if offline_target_detected { "✓ true" } else { "✗ false" }));
+    println!("{}", row("offline_robots",&offline_str,                                               &if offline.is_empty() { "none".to_string() } else { format!("{offline:?}") }));
+    println!("{BOLD}╚══════════════════════════════╝{RESET}");
 }
 
 /// Run a single benchmark with optional parameter overrides.
