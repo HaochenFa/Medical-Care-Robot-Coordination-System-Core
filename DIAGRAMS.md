@@ -60,7 +60,7 @@ sequenceDiagram
         R2->>Q: pop_blocking_or_closed()
     end
 
-    note over Z: zone = (task.id % 2) + 1, so only zones 1 and 2 exist
+    note over Z: zone = (task.id % 2) + 1<br/>so only zones 1 and 2 exist
 
     R0->>Z: acquire(zone)
     R1->>Z: acquire(zone)
@@ -75,9 +75,9 @@ sequenceDiagram
 
     M->>H: detect_offline(200ms) every 50ms
 
-    note over R1: stops heartbeats after task 2 completed
+    note over R1: stops heartbeats after<br/>task 2 completed
 
-    note over Main: all robot threads join, then...
+    note over Main: all robot threads join,<br/>then...
     Main->>H: keepalive heartbeats for robots 0 and 2
     Main->>H: wait_for_specific_offline(target=1, timeout=200ms)
     H-->>Main: robot 1 offline detected
@@ -131,9 +131,8 @@ The monitor now uses a single lock: `Mutex<HealthState>`, where `HealthState` co
 stateDiagram-v2
     [*] --> Unregistered
     Unregistered --> Online: register_robot() or heartbeat()
-    Online --> Online: heartbeat() — lock state, update timestamp, clear offline mark
-    Online --> Offline: detect_offline() — lock state, scan timestamps, mark overdue robots
-    Offline --> Online: heartbeat() — clears offline mark
+    Online --> Offline: detect_offline() marks overdue robot
+    Offline --> Online: heartbeat() clears offline mark
 ```
 
 ## 6) Benchmark/Stress Offline Semantics
@@ -141,8 +140,8 @@ stateDiagram-v2
 ```mermaid
 flowchart TD
     A["Start benchmark/stress run"] --> B{"offline-demo flag?"}
-    B -- "no" --> C["All robots send heartbeats throughout\n(no background monitor thread spawned)"]
-    B -- "yes" --> D["Spawn background monitor thread\nRobot 0 stops heartbeats after tasks_per_robot/2"]
+    B -- "no" --> C["All robots send heartbeats throughout<br/>(no background monitor thread spawned)"]
+    B -- "yes" --> D["Spawn background monitor thread<br/>Robot 0 stops heartbeats after<br/>tasks_per_robot/2"]
     C --> E["Workers finish all tasks"]
     D --> E
     E --> F["wait_for_offline(any, 500ms timeout, 1000ms max)"]
