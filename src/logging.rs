@@ -5,14 +5,14 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::Instant;
 
-pub const RESET:  &str = "\x1b[0m";
-pub const DIM:    &str = "\x1b[2m";
-pub const BOLD:   &str = "\x1b[1m";
-pub const RED:    &str = "\x1b[31m";
-pub const GREEN:  &str = "\x1b[32m";
+pub const RESET: &str = "\x1b[0m";
+pub const DIM: &str = "\x1b[2m";
+pub const BOLD: &str = "\x1b[1m";
+pub const RED: &str = "\x1b[31m";
+pub const GREEN: &str = "\x1b[32m";
 pub const YELLOW: &str = "\x1b[33m";
-pub const CYAN:   &str = "\x1b[36m";
-pub const GRAY:   &str = "\x1b[90m";
+pub const CYAN: &str = "\x1b[36m";
+pub const GRAY: &str = "\x1b[90m";
 
 static DEMO_START: OnceLock<Instant> = OnceLock::new();
 
@@ -23,8 +23,13 @@ pub fn init_demo_start() {
 
 /// Print a debug log line when compiled with debug assertions.
 pub fn dev_log(args: Arguments) {
-    if !cfg!(debug_assertions) { return; }
-    let ts = DEMO_START.get().map(|s| s.elapsed().as_millis()).unwrap_or(0);
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let ts = DEMO_START
+        .get()
+        .map(|s| s.elapsed().as_millis())
+        .unwrap_or(0);
     let thread_name = thread::current();
     let thread_name = thread_name.name().unwrap_or("unnamed");
     let msg = format!("{args}");

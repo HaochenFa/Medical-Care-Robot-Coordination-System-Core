@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -420,7 +420,9 @@ pub fn run_demo() {
         robots * tasks_per_robot,
         tasks_per_robot
     );
-    if cfg!(debug_assertions) { println!(); }
+    if cfg!(debug_assertions) {
+        println!();
+    }
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     for robot_id in 0..robots {
@@ -489,7 +491,9 @@ pub fn run_demo() {
                     } else {
                         log_dev!("[HEALTH] {name} stops heartbeats");
                     }
-                    if cfg!(debug_assertions) { println!(); }
+                    if cfg!(debug_assertions) {
+                        println!();
+                    }
                 }
             })
             .expect("failed to spawn robot thread");
@@ -557,20 +561,91 @@ pub fn run_demo() {
         let label_field = format!("{label:<16}");
         let visible = 2 + label_field.len() + value_plain.chars().count();
         let pad = W.saturating_sub(visible);
-        format!("{BOLD}║{RESET}  {label_field}{value_colored}{}{BOLD}║{RESET}", " ".repeat(pad))
+        format!(
+            "{BOLD}║{RESET}  {label_field}{value_colored}{}{BOLD}║{RESET}",
+            " ".repeat(pad)
+        )
     };
     println!();
     println!("{BOLD}╔════════════════════════════════════════════════════════════╗{RESET}");
     println!("{BOLD}║                        DEMO SUMMARY                        ║{RESET}");
     println!("{BOLD}╠════════════════════════════════════════════════════════════╣{RESET}");
-    println!("{}", row("robots",        &format!("{CYAN}{robots}{RESET}"),                          &robots.to_string()));
-    println!("{}", row("tasks_total",   &format!("{CYAN}{}{RESET}", robots * tasks_per_robot),      &(robots * tasks_per_robot).to_string()));
-    println!("{}", row("per_robot_done",&format!("{CYAN}{tasks_done:?}{RESET}"),                    &format!("{tasks_done:?}")));
-    println!("{}", row("max_zone_occ",  &format!("{YELLOW}{}{RESET}", zone_metrics.max_occupancy()),&zone_metrics.max_occupancy().to_string()));
-    println!("{}", row("zone_violation",&viol_str,                                                  if zone_metrics.has_violation() { "✗ true" } else { "✓ false" }));
-    println!("{}", row("offline_target",&format!("{YELLOW}{offline_target}{RESET}"),                &offline_target.to_string()));
-    println!("{}", row("detected",      &det_str,                                                   if offline_target_detected { "✓ true" } else { "✗ false" }));
-    println!("{}", row("offline_robots",&offline_str,                                               &if offline.is_empty() { "none".to_string() } else { format!("{offline:?}") }));
+    println!(
+        "{}",
+        row(
+            "robots",
+            &format!("{CYAN}{robots}{RESET}"),
+            &robots.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "tasks_total",
+            &format!("{CYAN}{}{RESET}", robots * tasks_per_robot),
+            &(robots * tasks_per_robot).to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "per_robot_done",
+            &format!("{CYAN}{tasks_done:?}{RESET}"),
+            &format!("{tasks_done:?}")
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "max_zone_occ",
+            &format!("{YELLOW}{}{RESET}", zone_metrics.max_occupancy()),
+            &zone_metrics.max_occupancy().to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "zone_violation",
+            &viol_str,
+            if zone_metrics.has_violation() {
+                "✗ true"
+            } else {
+                "✓ false"
+            }
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "offline_target",
+            &format!("{YELLOW}{offline_target}{RESET}"),
+            &offline_target.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "detected",
+            &det_str,
+            if offline_target_detected {
+                "✓ true"
+            } else {
+                "✗ false"
+            }
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "offline_robots",
+            &offline_str,
+            &if offline.is_empty() {
+                "none".to_string()
+            } else {
+                format!("{offline:?}")
+            }
+        )
+    );
     println!("{BOLD}╚════════════════════════════════════════════════════════════╝{RESET}");
 }
 
@@ -635,7 +710,10 @@ fn print_bench_box(
         let label_field = format!("{label:<18}");
         let visible = 2 + label_field.chars().count() + value_plain.chars().count();
         let pad = W.saturating_sub(visible);
-        format!("{BOLD}║{RESET}  {label_field}{value_colored}{}{BOLD}║{RESET}", " ".repeat(pad))
+        format!(
+            "{BOLD}║{RESET}  {label_field}{value_colored}{}{BOLD}║{RESET}",
+            " ".repeat(pad)
+        )
     };
     let cpu_user = result
         .cpu_user_s
@@ -661,7 +739,9 @@ fn print_bench_box(
     );
     let banner_visible = banner_params.chars().count();
     let banner_pad_l = (W.saturating_sub(banner_visible)) / 2;
-    let banner_pad_r = W.saturating_sub(banner_visible).saturating_sub(banner_pad_l);
+    let banner_pad_r = W
+        .saturating_sub(banner_visible)
+        .saturating_sub(banner_pad_l);
     println!();
     println!("{BOLD}{CYAN}╔════════════════════════════════════════════════════════════╗{RESET}");
     println!("{BOLD}{CYAN}║              Project Blaze — Benchmark                     ║{RESET}");
@@ -676,23 +756,118 @@ fn print_bench_box(
     println!("{BOLD}╔════════════════════════════════════════════════════════════╗{RESET}");
     println!("{BOLD}║                     BENCH RESULTS                          ║{RESET}");
     println!("{BOLD}╠════════════════════════════════════════════════════════════╣{RESET}");
-    println!("{}", row("robots",           &format!("{CYAN}{robots}{RESET}"),                                   &robots.to_string()));
-    println!("{}", row("tasks_per_robot",  &format!("{CYAN}{tasks_per_robot}{RESET}"),                          &tasks_per_robot.to_string()));
-    println!("{}", row("zones",            &format!("{CYAN}{zones_total}{RESET}"),                              &zones_total.to_string()));
-    println!("{}", row("total_tasks",      &format!("{CYAN}{}{RESET}", result.total_tasks),                     &result.total_tasks.to_string()));
-    println!("{}", row("elapsed_ms",       &format!("{YELLOW}{:.2}{RESET}", result.elapsed_ms),                 &format!("{:.2}", result.elapsed_ms)));
-    println!("{}", row("throughput",       &format!("{YELLOW}{:.2} tasks/s{RESET}", result.throughput),         &format!("{:.2} tasks/s", result.throughput)));
-    println!("{}", row("avg_zone_wait_µs", &format!("{YELLOW}{:.2}{RESET}", result.avg_zone_wait_us),           &format!("{:.2}", result.avg_zone_wait_us)));
-    println!("{}", row("cpu_user_s",       &format!("{YELLOW}{cpu_user}{RESET}"),                               &cpu_user));
-    println!("{}", row("cpu_sys_s",        &format!("{YELLOW}{cpu_sys}{RESET}"),                                &cpu_sys));
-    println!("{}", row("max_occupancy",    &format!("{YELLOW}{}{RESET}", result.max_occupancy),                 &result.max_occupancy.to_string()));
-    println!("{}", row("zone_violation",   &viol_str,                                                           if result.zone_violation { "✗ true" } else { "✓ false" }));
-    println!("{}", row("duplicate_tasks",  &dup_str,                                                            if result.duplicate_tasks { "✗ true" } else { "✓ false" }));
-    println!("{}", row("offline_robots",   &format!("{YELLOW}{}{RESET}", result.offline_count),                 &result.offline_count.to_string()));
+    println!(
+        "{}",
+        row(
+            "robots",
+            &format!("{CYAN}{robots}{RESET}"),
+            &robots.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "tasks_per_robot",
+            &format!("{CYAN}{tasks_per_robot}{RESET}"),
+            &tasks_per_robot.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "zones",
+            &format!("{CYAN}{zones_total}{RESET}"),
+            &zones_total.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "total_tasks",
+            &format!("{CYAN}{}{RESET}", result.total_tasks),
+            &result.total_tasks.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "elapsed_ms",
+            &format!("{YELLOW}{:.2}{RESET}", result.elapsed_ms),
+            &format!("{:.2}", result.elapsed_ms)
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "throughput",
+            &format!("{YELLOW}{:.2} tasks/s{RESET}", result.throughput),
+            &format!("{:.2} tasks/s", result.throughput)
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "avg_zone_wait_µs",
+            &format!("{YELLOW}{:.2}{RESET}", result.avg_zone_wait_us),
+            &format!("{:.2}", result.avg_zone_wait_us)
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "cpu_user_s",
+            &format!("{YELLOW}{cpu_user}{RESET}"),
+            &cpu_user
+        )
+    );
+    println!(
+        "{}",
+        row("cpu_sys_s", &format!("{YELLOW}{cpu_sys}{RESET}"), &cpu_sys)
+    );
+    println!(
+        "{}",
+        row(
+            "max_occupancy",
+            &format!("{YELLOW}{}{RESET}", result.max_occupancy),
+            &result.max_occupancy.to_string()
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "zone_violation",
+            &viol_str,
+            if result.zone_violation {
+                "✗ true"
+            } else {
+                "✓ false"
+            }
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "duplicate_tasks",
+            &dup_str,
+            if result.duplicate_tasks {
+                "✗ true"
+            } else {
+                "✓ false"
+            }
+        )
+    );
+    println!(
+        "{}",
+        row(
+            "offline_robots",
+            &format!("{YELLOW}{}{RESET}", result.offline_count),
+            &result.offline_count.to_string()
+        )
+    );
     println!("{BOLD}╚════════════════════════════════════════════════════════════╝{RESET}");
 }
 
-/// Sweep multiple benchmark configurations and print CSV output.
+/// Sweep multiple benchmark configurations and print a formatted summary table.
 pub fn run_stress(
     robot_sets: Option<Vec<usize>>,
     task_sets: Option<Vec<usize>>,
@@ -730,9 +905,21 @@ pub fn run_stress(
         }
     }
 
-    let robot_sets_str = robot_sets.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
-    let task_sets_str = task_sets.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
-    let zone_sets_str = zone_sets.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+    let robot_sets_str = robot_sets
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let task_sets_str = task_sets
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let zone_sets_str = zone_sets
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let mut results: Vec<BenchResult> = Vec::new();
     for robots in robot_sets {
         for tasks_per_robot in task_sets.iter().copied() {
@@ -771,34 +958,62 @@ fn print_stress_table(
 ) {
     use crate::logging::*;
     // Column headers (short aliases)
-    let headers = ["robots", "tasks/r", "zones", "total", "elapsed_ms", "tput(t/s)", "wait_µs", "max_occ", "violation", "dupes", "offline"];
+    let headers = [
+        "robots",
+        "tasks/r",
+        "zones",
+        "total",
+        "elapsed_ms",
+        "tput(t/s)",
+        "wait_µs",
+        "max_occ",
+        "violation",
+        "dupes",
+        "offline",
+    ];
     // Build formatted cell values for each row
-    let rows: Vec<[String; 11]> = results.iter().map(|r| {
-        [
-            r.robots.to_string(),
-            r.tasks_per_robot.to_string(),
-            r.zones_total.to_string(),
-            r.total_tasks.to_string(),
-            format!("{:.2}", r.elapsed_ms),
-            format!("{:.2}", r.throughput),
-            format!("{:.2}", r.avg_zone_wait_us),
-            r.max_occupancy.to_string(),
-            if r.zone_violation { "✗ true".to_string() } else { "✓ false".to_string() },
-            if r.duplicate_tasks { "✗ true".to_string() } else { "✓ false".to_string() },
-            r.offline_count.to_string(),
-        ]
-    }).collect();
+    let rows: Vec<[String; 11]> = results
+        .iter()
+        .map(|r| {
+            [
+                r.robots.to_string(),
+                r.tasks_per_robot.to_string(),
+                r.zones_total.to_string(),
+                r.total_tasks.to_string(),
+                format!("{:.2}", r.elapsed_ms),
+                format!("{:.2}", r.throughput),
+                format!("{:.2}", r.avg_zone_wait_us),
+                r.max_occupancy.to_string(),
+                if r.zone_violation {
+                    "✗ true".to_string()
+                } else {
+                    "✓ false".to_string()
+                },
+                if r.duplicate_tasks {
+                    "✗ true".to_string()
+                } else {
+                    "✓ false".to_string()
+                },
+                r.offline_count.to_string(),
+            ]
+        })
+        .collect();
     // Compute column widths: max of header and all row values
-    let col_widths: Vec<usize> = (0..11).map(|i| {
-        let header_w = headers[i].chars().count();
-        let data_w = rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
-        header_w.max(data_w)
-    }).collect();
+    let col_widths: Vec<usize> = (0..11)
+        .map(|i| {
+            let header_w = headers[i].chars().count();
+            let data_w = rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
+            header_w.max(data_w)
+        })
+        .collect();
     // Separator line width
     let sep_width: usize = col_widths.iter().sum::<usize>() + 3 * (col_widths.len() - 1) + 4;
     let sep: String = "─".repeat(sep_width);
     // Banner
-    let banner_params = format!("robots={}  tasks={}  zones={}", robot_sets_str, task_sets_str, zone_sets_str);
+    let banner_params = format!(
+        "robots={}  tasks={}  zones={}",
+        robot_sets_str, task_sets_str, zone_sets_str
+    );
     let banner_w = 60usize;
     let bpv = banner_params.chars().count();
     let bp_l = (banner_w.saturating_sub(bpv)) / 2;
@@ -808,29 +1023,50 @@ fn print_stress_table(
     println!("{BOLD}{CYAN}║               Project Blaze — Stress Test                  ║{RESET}");
     println!(
         "{BOLD}{CYAN}║{RESET}{}{CYAN}{}{RESET}{}{BOLD}{CYAN}║{RESET}",
-        " ".repeat(bp_l), banner_params, " ".repeat(bp_r)
+        " ".repeat(bp_l),
+        banner_params,
+        " ".repeat(bp_r)
     );
     println!("{BOLD}{CYAN}╚════════════════════════════════════════════════════════════╝{RESET}");
     println!();
     // Header row
-    let header_line: String = col_widths.iter().enumerate().map(|(i, &w)| {
-        format!("{BOLD}{:>w$}{RESET}", headers[i], w = w)
-    }).collect::<Vec<_>>().join("   ");
+    let header_line: String = col_widths
+        .iter()
+        .enumerate()
+        .map(|(i, &w)| format!("{BOLD}{:>w$}{RESET}", headers[i], w = w))
+        .collect::<Vec<_>>()
+        .join("   ");
     println!("  {header_line}");
     println!("  {sep}");
     // Data rows
     for row in &rows {
-        let cells: Vec<String> = col_widths.iter().enumerate().map(|(i, &w)| {
-            let plain = &row[i];
-            let colored = match i {
-                8 => if plain.starts_with('✗') { format!("{RED}{plain}{RESET}") } else { format!("{GREEN}{plain}{RESET}") },
-                9 => if plain.starts_with('✗') { format!("{RED}{plain}{RESET}") } else { format!("{GREEN}{plain}{RESET}") },
-                _ => format!("{YELLOW}{plain}{RESET}"),
-            };
-            // right-align by padding before colored value
-            let pad = w.saturating_sub(plain.chars().count());
-            format!("{}{colored}", " ".repeat(pad))
-        }).collect();
+        let cells: Vec<String> = col_widths
+            .iter()
+            .enumerate()
+            .map(|(i, &w)| {
+                let plain = &row[i];
+                let colored = match i {
+                    8 => {
+                        if plain.starts_with('✗') {
+                            format!("{RED}{plain}{RESET}")
+                        } else {
+                            format!("{GREEN}{plain}{RESET}")
+                        }
+                    }
+                    9 => {
+                        if plain.starts_with('✗') {
+                            format!("{RED}{plain}{RESET}")
+                        } else {
+                            format!("{GREEN}{plain}{RESET}")
+                        }
+                    }
+                    _ => format!("{YELLOW}{plain}{RESET}"),
+                };
+                // right-align by padding before colored value
+                let pad = w.saturating_sub(plain.chars().count());
+                format!("{}{colored}", " ".repeat(pad))
+            })
+            .collect();
         println!("  {}", cells.join("   "));
     }
     // Footer
@@ -838,5 +1074,10 @@ fn print_stress_table(
     let total_duplicates: usize = results.iter().filter(|r| r.duplicate_tasks).count();
     println!();
     println!("  {}", "─".repeat(36));
-    println!("  {} runs  ·  {} violations  ·  {} duplicates", results.len(), total_violations, total_duplicates);
+    println!(
+        "  {} runs  ·  {} violations  ·  {} duplicates",
+        results.len(),
+        total_violations,
+        total_duplicates
+    );
 }

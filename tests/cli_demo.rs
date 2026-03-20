@@ -25,7 +25,9 @@ fn strip_ansi(s: &str) -> String {
         if c == '\x1b' {
             // consume until 'm'
             for ch in chars.by_ref() {
-                if ch == 'm' { break; }
+                if ch == 'm' {
+                    break;
+                }
             }
         } else {
             out.push(c);
@@ -49,26 +51,38 @@ fn demo_cli_reports_offline_and_no_zone_violation() {
         .lines()
         .find(|line| line.contains("zone_violation"))
         .expect("zone_violation line missing");
-    assert!(zone_line.contains("false"), "expected zone_violation=false, got: {zone_line}");
+    assert!(
+        zone_line.contains("false"),
+        "expected zone_violation=false, got: {zone_line}"
+    );
 
     let target_line = plain
         .lines()
         .find(|line| line.contains("offline_target") && !line.contains("detected"))
         .expect("offline_target line missing");
-    assert!(target_line.contains('1'), "expected offline_target=1, got: {target_line}");
+    assert!(
+        target_line.contains('1'),
+        "expected offline_target=1, got: {target_line}"
+    );
 
     let detected_line = plain
         .lines()
         .find(|line| line.contains("detected"))
         .expect("offline_target_detected line missing");
-    assert!(detected_line.contains("true"), "expected detected=true, got: {detected_line}");
+    assert!(
+        detected_line.contains("true"),
+        "expected detected=true, got: {detected_line}"
+    );
 
     // The demo intentionally marks the fixed target robot as offline.
     let offline_line = plain
         .lines()
         .find(|line| line.contains("offline_robots"))
         .expect("offline_robots line missing");
-    assert!(offline_line.contains('1'), "expected offline_robots to contain 1, got: {offline_line}");
+    assert!(
+        offline_line.contains('1'),
+        "expected offline_robots to contain 1, got: {offline_line}"
+    );
 }
 
 #[test]
@@ -82,12 +96,18 @@ fn demo_cli_deterministically_marks_fixed_target_offline() {
             .lines()
             .find(|line| line.contains("detected"))
             .expect("offline_target_detected line missing");
-        assert!(detected_line.contains("true"), "expected detected=true, got: {detected_line}");
+        assert!(
+            detected_line.contains("true"),
+            "expected detected=true, got: {detected_line}"
+        );
 
         let offline_line = plain
             .lines()
             .find(|line| line.contains("offline_robots"))
             .expect("offline_robots line missing");
-        assert!(offline_line.contains('1'), "expected offline_robots to contain 1, got: {offline_line}");
+        assert!(
+            offline_line.contains('1'),
+            "expected offline_robots to contain 1, got: {offline_line}"
+        );
     }
 }

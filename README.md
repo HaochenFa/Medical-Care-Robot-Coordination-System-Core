@@ -39,12 +39,12 @@ Explicit non-goals:
   - `ZoneAccess`: `Mutex<HashMap<ZoneId, RobotId>>` + `Condvar`
   - Enforces single-owner occupancy per zone; `acquire` blocks until the zone is free
 - `src/health_monitor.rs`
-  - `HealthMonitor`: `Mutex<HealthState>`
-  - Tracks `last_seen` timestamps and `offline` robot set; polled by a background thread
+  - `HealthMonitor`: `RwLock<HashMap<RobotId, Instant>>` + `Mutex<HashSet<RobotId>>`
+  - Tracks `last_seen` timestamps and the offline robot set; detection and heartbeats use a consistent lock order
 - `src/sim.rs`
   - Demo runner (`run_demo`): 3 robots, 2 zones, deterministic offline target (robot 1)
-  - Benchmark runner (`run_benchmark`): single parameterized run, CSV output
-  - Stress sweep runner (`run_stress`): iterates robot/task/zone sets, CSV output
+  - Benchmark runner (`run_benchmark`): single parameterized run, boxed summary output
+  - Stress sweep runner (`run_stress`): iterates robot/task/zone sets, aligned table output
 - `src/main.rs`
   - CLI entry point; subcommands: _(no args)_ demo, `bench`, `stress`, `--help`
 - `src/logging.rs`
@@ -147,7 +147,7 @@ cargo run
 
 Debug builds print detailed queue/zone/health transitions.
 
-### 3) Verify benchmark CSV behavior
+### 3) Verify benchmark summary output
 
 Standard benchmark:
 
@@ -155,7 +155,7 @@ Standard benchmark:
 cargo run --release -- bench 4 25 2 5 validate
 ```
 
-Expected key columns:
+Expected key rows:
 
 - `zone_violation=false`
 - `duplicate_tasks=false`
@@ -210,11 +210,25 @@ Important semantics:
 - `offline_target_detected`
 - `offline_robots`
 
-### Benchmark/Stress CSV columns
+### Benchmark/Stress output fields
 
-```text
-robots,tasks_per_robot,zones,total_tasks,elapsed_ms,throughput_tasks_per_s,avg_zone_wait_us,cpu_user_s,cpu_sys_s,max_occupancy,zone_violation,duplicate_tasks,offline_robots
-```
+The benchmark command prints a boxed summary with these fields:
+
+- `robots`
+- `tasks_per_robot`
+- `zones`
+- `total_tasks`
+- `elapsed_ms`
+- `throughput`
+- `avg_zone_wait_µs`
+- `cpu_user_s`
+- `cpu_sys_s`
+- `max_occupancy`
+- `zone_violation`
+- `duplicate_tasks`
+- `offline_robots`
+
+The stress command prints the same metrics as aligned table columns using the shorter labels shown in the CLI (`tasks/r`, `tput(t/s)`, `wait_µs`, and so on).
 
 Platform note:
 

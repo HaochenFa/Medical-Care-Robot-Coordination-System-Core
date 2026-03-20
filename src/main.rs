@@ -209,7 +209,10 @@ fn parse_stress_args(program: &str, args: impl Iterator<Item = String>) -> Stres
                 consumed = true;
             }
             if !consumed {
-                exit_with_usage(&program, &format!("stress: invalid robot_sets value: {arg}"));
+                exit_with_usage(
+                    &program,
+                    &format!("stress: invalid robot_sets value: {arg}"),
+                );
             }
             continue;
         }
