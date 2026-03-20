@@ -28,6 +28,14 @@ pub fn dev_log(args: Arguments) {
     let thread_name = thread::current();
     let thread_name = thread_name.name().unwrap_or("unnamed");
     let msg = format!("{args}");
+    // Pad the leading [TAG] to 8 chars so message content starts at a fixed column.
+    let msg = if let Some(end) = msg.find(']') {
+        let tag = &msg[..=end];
+        let rest = &msg[end + 1..];
+        format!("{tag:<8}{rest}")
+    } else {
+        msg
+    };
     let color = if msg.contains("[QUEUE]") {
         CYAN
     } else if msg.contains("[ZONE]") {
@@ -39,7 +47,7 @@ pub fn dev_log(args: Arguments) {
     } else {
         GRAY
     };
-    println!("{DIM}[+{ts}ms][{thread_name}]{RESET} {color}{msg}{RESET}");
+    println!("{DIM}[+{ts:>5}ms][{thread_name:^14}]{RESET} {color}{msg}{RESET}");
 }
 
 /// Convenience macro for debug-only logging.
