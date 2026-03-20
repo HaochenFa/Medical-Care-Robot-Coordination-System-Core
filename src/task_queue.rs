@@ -75,6 +75,7 @@ impl TaskQueue {
     }
 
     /// Current number of queued tasks.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         let guard = self.inner.lock().expect("task queue mutex poisoned");
         guard.queue.len()

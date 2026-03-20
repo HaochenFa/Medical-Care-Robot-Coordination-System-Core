@@ -7,16 +7,23 @@ cargo build --release          # verify build passes
 cargo run                      # run built-in deterministic demo (default mode)
 cargo test                     # unit tests
 cargo test --test cli_demo     # integration test (grader-visible output)
+cargo run --release -- --help  # CLI usage
 ```
 
 ## CLI Usage
 
+```bash
+cargo run --release                    # default deterministic demo
+cargo run --release -- bench 4 25 2 5 validate
+cargo run --release -- stress 1,2,4 10,25 1,2 5 validate --offline-demo
 ```
-cargo run -- [robots] [zones] [tasks] [offline_robot_ids] [heartbeat_ms] [timeout_ms]
-# Use "-" for any arg to accept defaults.
-# Example (custom): cargo run -- 4 3 10 2 200 800
-# Example (default demo): cargo run
-```
+
+Subcommands:
+
+- `(no subcommand)`: run demo
+- `bench [robots] [tasks_per_robot] [zones] [work_ms] [validate] [offline-demo]`
+- `stress [robot_sets] [task_sets] [zone_sets] [work_ms] [validate] [offline-demo]`
+- `--help`
 
 ## Module Map
 
@@ -25,8 +32,8 @@ cargo run -- [robots] [zones] [tasks] [offline_robot_ids] [heartbeat_ms] [timeou
 | `src/main.rs` | CLI entry point, arg parsing |
 | `src/sim.rs` | `run_demo`, `run_benchmark`, `run_stress` orchestrators |
 | `src/task_queue.rs` | `TaskQueue`: `Mutex<VecDeque<Task>>` + `Condvar` |
-| `src/zones.rs` | `ZoneAccess`: `Mutex<HashMap<ZoneId,RobotId>>` + `Condvar` |
-| `src/health_monitor.rs` | `HealthMonitor`: heartbeat tracking, offline detection |
+| `src/zones.rs` | `ZoneAccess`: `Mutex<Vec<Option<RobotId>>>` + per-zone `Condvar`s |
+| `src/health_monitor.rs` | `HealthMonitor`: `Mutex<HealthState>` for heartbeat tracking and offline detection |
 | `src/types.rs` | Shared types (`Task`, `RobotId`, `ZoneId`, …) |
 | `src/logging.rs` | Structured log helpers |
 | `tests/cli_demo.rs` | Integration tests against binary stdout |
@@ -75,6 +82,8 @@ The demo must clearly show all three behaviors:
 
 - Use safe Rust synchronization primitives (e.g., `Mutex`, `RwLock`, `Condvar`, channels).
 - Avoid unnecessary shared state; prefer clear ownership and narrow lock scopes.
+- Prefer fixed-size, direct-indexed zone state when the zone set is known at setup time.
+- Keep related shared state under one lock when that reduces coordination complexity and preserves correctness.
 - Keep module structure readable and idiomatic.
 - Provide observable behavior (logs or outputs) for demo and debugging.
 

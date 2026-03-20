@@ -36,15 +36,18 @@ Explicit non-goals:
   - Supports non-blocking (`try_pop`) and blocking (`pop_blocking_or_closed`) task fetch
   - Provides queue shutdown behavior (`close`) that unblocks all waiting consumers
 - `src/zones.rs`
-  - `ZoneAccess`: `Mutex<HashMap<ZoneId, RobotId>>` + `Condvar`
+  - `ZoneAccess`: `Mutex<Vec<Option<RobotId>>>` + per-zone `Condvar`s
+  - Uses a fixed, 1-indexed zone table sized at construction time
   - Enforces single-owner occupancy per zone; `acquire` blocks until the zone is free
 - `src/health_monitor.rs`
-  - `HealthMonitor`: `RwLock<HashMap<RobotId, Instant>>` + `Mutex<HashSet<RobotId>>`
-  - Tracks `last_seen` timestamps and the offline robot set; detection and heartbeats use a consistent lock order
+  - `HealthMonitor`: `Mutex<HealthState>` where `HealthState` stores both heartbeat timestamps and the offline set
+  - Keeps heartbeat updates and offline detection in one coherent critical section
 - `src/sim.rs`
   - Demo runner (`run_demo`): 3 robots, 2 zones, deterministic offline target (robot 1)
   - Benchmark runner (`run_benchmark`): single parameterized run, boxed summary output
   - Stress sweep runner (`run_stress`): iterates robot/task/zone sets, aligned table output
+  - Benchmark validation uses a fixed seen-table keyed by task id instead of a channel
+  - The background health-monitor thread is only spawned for `offline-demo` benchmark/stress runs
 - `src/main.rs`
   - CLI entry point; subcommands: _(no args)_ demo, `bench`, `stress`, `--help`
 - `src/logging.rs`
@@ -130,12 +133,12 @@ Expected summary fields:
 - `DEMO SUMMARY`
 - `zone_violation=false`
 - `offline_target=1`
-- `offline_target_detected=true`
+- `detected=true`
 - `offline_robots={1}`
 
 Interpretation:
 
-- Concurrency is active (`tasks_per_robot_done` vector covers all robots).
+- Concurrency is active (`per_robot_done` vector covers all robots).
 - Zone exclusivity holds (`zone_violation=false`).
 - Offline detection is deterministic for grading (`offline_target=1` and detected).
 
@@ -203,11 +206,11 @@ Important semantics:
 
 - `robots`
 - `tasks_total`
-- `tasks_per_robot_done`
-- `max_zone_occupancy_observed`
+- `per_robot_done`
+- `max_zone_occ`
 - `zone_violation`
 - `offline_target`
-- `offline_target_detected`
+- `detected`
 - `offline_robots`
 
 ### Benchmark/Stress output fields

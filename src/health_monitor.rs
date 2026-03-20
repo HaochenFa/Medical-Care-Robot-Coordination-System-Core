@@ -1,45 +1,50 @@
 //! Heartbeat tracking and offline detection for robots.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, RwLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::types::RobotId;
 
 /// Tracks robot heartbeats and reports offline robots after a timeout.
 pub struct HealthMonitor {
-    heartbeats: RwLock<HashMap<RobotId, Instant>>,
-    offline: Mutex<HashSet<RobotId>>,
+    inner: Mutex<HealthState>,
+}
+
+struct HealthState {
+    heartbeats: HashMap<RobotId, Instant>,
+    offline: HashSet<RobotId>,
 }
 
 impl HealthMonitor {
     /// Create an empty health monitor.
     pub fn new() -> Self {
         Self {
-            heartbeats: RwLock::new(HashMap::new()),
-            offline: Mutex::new(HashSet::new()),
+            inner: Mutex::new(HealthState {
+                heartbeats: HashMap::new(),
+                offline: HashSet::new(),
+            }),
         }
     }
 
     /// Ensure a robot is tracked; no-op if already registered.
     pub fn register_robot(&self, robot: RobotId) {
-        self.heartbeats
-            .write()
-            .expect("heartbeats rwlock poisoned")
+        self.inner
+            .lock()
+            .expect("health monitor mutex poisoned")
+            .heartbeats
             .entry(robot)
             .or_insert_with(Instant::now);
     }
 
     /// Record a heartbeat; clears any prior offline mark for the robot.
     pub fn heartbeat(&self, robot: RobotId) {
-        self.heartbeats
-            .write()
-            .expect("heartbeats rwlock poisoned")
-            .insert(robot, Instant::now());
-        self.offline
+        let mut guard = self
+            .inner
             .lock()
-            .expect("offline mutex poisoned")
-            .remove(&robot);
+            .expect("health monitor mutex poisoned");
+        guard.heartbeats.insert(robot, Instant::now());
+        guard.offline.remove(&robot);
     }
 
     /// Detect robots whose last heartbeat exceeds the timeout.
@@ -57,8 +62,12 @@ impl HealthMonitor {
         F: FnOnce(),
     {
         let now = Instant::now();
-        let heartbeats = self.heartbeats.read().expect("heartbeats rwlock poisoned");
-        let overdue: Vec<_> = heartbeats
+        let mut guard = self
+            .inner
+            .lock()
+            .expect("health monitor mutex poisoned");
+        let overdue: Vec<_> = guard
+            .heartbeats
             .iter()
             .filter_map(|(&robot, &last)| {
                 if now.duration_since(last) > timeout {
@@ -68,27 +77,29 @@ impl HealthMonitor {
                 }
             })
             .collect();
-        // Keep the heartbeat snapshot locked until the offline set is updated so
-        // a concurrent heartbeat cannot be reinserted from a stale overdue list.
         before_commit();
-        let mut guard = self.offline.lock().expect("offline mutex poisoned");
         for robot in overdue {
-            guard.insert(robot);
+            guard.offline.insert(robot);
         }
-        guard.clone()
+        guard.offline.clone()
     }
 
     /// Snapshot of the robots currently marked offline.
     pub fn offline_robots(&self) -> HashSet<RobotId> {
-        self.offline.lock().expect("offline mutex poisoned").clone()
+        self.inner
+            .lock()
+            .expect("health monitor mutex poisoned")
+            .offline
+            .clone()
     }
 
     /// Test-only hook to set deterministic timestamps without sleeping.
     #[cfg(test)]
     fn set_last_seen_for_test(&self, robot: RobotId, instant: Instant) {
-        self.heartbeats
-            .write()
-            .expect("heartbeats rwlock poisoned")
+        self.inner
+            .lock()
+            .expect("health monitor mutex poisoned")
+            .heartbeats
             .insert(robot, instant);
     }
 }

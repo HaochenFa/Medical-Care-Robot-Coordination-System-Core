@@ -1,8 +1,8 @@
 //! Simulation, benchmark, and stress-test runners for Project Blaze.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -75,7 +75,7 @@ fn spawn_health_monitor(
     poll: Duration,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        while !stop_flag.load(Ordering::SeqCst) {
+        while !stop_flag.load(Ordering::Relaxed) {
             let _ = monitor.detect_offline_any(timeout);
             thread::sleep(poll);
         }
@@ -154,53 +154,43 @@ impl ZoneMetrics {
     }
 
     fn enter(&self, zone: u64, zones_total: usize) {
-        let current = self.occupancy.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = self.occupancy.fetch_add(1, Ordering::Relaxed) + 1;
         let zone_index = zone as usize;
         // Zone ids are 1-based; index 0 is unused.
         debug_assert!(zone_index <= zones_total, "zone index out of range");
-        let zone_count = self.per_zone_occupancy[zone_index].fetch_add(1, Ordering::SeqCst) + 1;
+        let zone_count =
+            self.per_zone_occupancy[zone_index].fetch_add(1, Ordering::Relaxed) + 1;
         if zone_count > 1 {
-            self.zone_violation.store(true, Ordering::SeqCst);
+            self.zone_violation.store(true, Ordering::Relaxed);
         }
-        let mut prev = self.max_occupancy.load(Ordering::SeqCst);
-        while current > prev {
-            match self.max_occupancy.compare_exchange(
-                prev,
-                current,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => break,
-                Err(next) => prev = next,
-            }
-        }
+        self.max_occupancy.fetch_max(current, Ordering::Relaxed);
         if current > zones_total {
-            self.zone_violation.store(true, Ordering::SeqCst);
+            self.zone_violation.store(true, Ordering::Relaxed);
         }
     }
 
     fn pre_release(&self, zone: u64, zones_total: usize) {
         let zone_index = zone as usize;
         debug_assert!(zone_index <= zones_total, "zone index out of range");
-        let zone_prev = self.per_zone_occupancy[zone_index].fetch_sub(1, Ordering::SeqCst);
+        let zone_prev = self.per_zone_occupancy[zone_index].fetch_sub(1, Ordering::Relaxed);
         debug_assert!(zone_prev > 0, "zone counter underflow");
-        let occ_prev = self.occupancy.fetch_sub(1, Ordering::SeqCst);
+        let occ_prev = self.occupancy.fetch_sub(1, Ordering::Relaxed);
         debug_assert!(occ_prev > 0, "occupancy counter underflow");
     }
 
     fn revert_pre_release(&self, zone: u64, zones_total: usize) {
         let zone_index = zone as usize;
         debug_assert!(zone_index <= zones_total, "zone index out of range");
-        self.per_zone_occupancy[zone_index].fetch_add(1, Ordering::SeqCst);
-        self.occupancy.fetch_add(1, Ordering::SeqCst);
+        self.per_zone_occupancy[zone_index].fetch_add(1, Ordering::Relaxed);
+        self.occupancy.fetch_add(1, Ordering::Relaxed);
     }
 
     fn max_occupancy(&self) -> usize {
-        self.max_occupancy.load(Ordering::SeqCst)
+        self.max_occupancy.load(Ordering::Relaxed)
     }
 
     fn has_violation(&self) -> bool {
-        self.zone_violation.load(Ordering::SeqCst)
+        self.zone_violation.load(Ordering::Relaxed)
     }
 }
 
@@ -242,32 +232,41 @@ fn benchmark_once(
     let total_tasks = robots * tasks_per_robot;
     for id in 0..total_tasks {
         queue
-            .push(Task::new(id as u64, format!("bench-{id}")))
+            .push(Task {
+                id: id as u64,
+                description: String::new(),
+            })
             .expect("task queue closed");
     }
-    let total_tasks = queue.len();
 
     // Total wait time across all zone acquisitions for averaging.
-    let zone_wait_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let zone_wait_us = Arc::new(AtomicU64::new(0));
     let zone_metrics = Arc::new(ZoneMetrics::new(zones_len));
     let duplicate_tasks = Arc::new(AtomicBool::new(false));
-    let (task_tx, task_rx) = if validate {
-        let (tx, rx) = mpsc::channel::<u64>();
-        (Some(tx), Some(rx))
+    let seen_tasks = if validate {
+        Some(Arc::new(
+            (0..total_tasks)
+                .map(|_| AtomicU8::new(0))
+                .collect::<Vec<_>>(),
+        ))
     } else {
-        (None, None)
+        None
     };
 
     for robot_id in 0..robots {
         monitor.register_robot(robot_id as u64);
     }
 
-    let monitor_thread = spawn_health_monitor(
-        Arc::clone(&monitor),
-        Arc::clone(&stop_flag),
-        Duration::from_millis(BENCH_OFFLINE_TIMEOUT_MS),
-        Duration::from_millis(100),
-    );
+    let monitor_thread = if simulate_offline {
+        Some(spawn_health_monitor(
+            Arc::clone(&monitor),
+            Arc::clone(&stop_flag),
+            Duration::from_millis(BENCH_OFFLINE_TIMEOUT_MS),
+            Duration::from_millis(100),
+        ))
+    } else {
+        None
+    };
 
     let mut handles = Vec::new();
     let cpu_start = cpu_times_seconds();
@@ -278,7 +277,8 @@ fn benchmark_once(
         let zone_wait_us = Arc::clone(&zone_wait_us);
         let monitor = Arc::clone(&monitor);
         let zone_metrics = Arc::clone(&zone_metrics);
-        let task_sender = task_tx.as_ref().map(|tx| tx.clone());
+        let seen_tasks = seen_tasks.as_ref().map(Arc::clone);
+        let duplicate_tasks = Arc::clone(&duplicate_tasks);
         handles.push(thread::spawn(move || {
             let stop_after = if simulate_offline && robots > 1 && robot_id == 0 {
                 tasks_per_robot / 2
@@ -288,14 +288,18 @@ fn benchmark_once(
             let mut completed = 0usize;
             while completed < tasks_per_robot {
                 let task = queue.pop_blocking_or_closed().expect("task queue closed");
-                if let Some(ref s) = task_sender {
-                    let _ = s.send(task.id);
+                if let Some(ref seen) = seen_tasks {
+                    let idx = task.id as usize;
+                    debug_assert!(idx < seen.len(), "task id out of range: {}", task.id);
+                    if seen[idx].swap(1, Ordering::Relaxed) != 0 {
+                        duplicate_tasks.store(true, Ordering::Relaxed);
+                    }
                 }
                 let zone = (task.id % zones_total) + 1;
                 let wait_start = Instant::now();
                 zones.acquire(zone, robot_id as u64);
                 let waited = wait_start.elapsed().as_micros() as u64;
-                zone_wait_us.fetch_add(waited, Ordering::SeqCst);
+                zone_wait_us.fetch_add(waited, Ordering::Relaxed);
                 zone_metrics.enter(zone, zones_len);
                 if work_ms > 0 {
                     thread::sleep(Duration::from_millis(work_ms));
@@ -318,16 +322,6 @@ fn benchmark_once(
     for handle in handles {
         handle.join().expect("benchmark thread panicked");
     }
-    // Drop the original sender so the channel closes when all thread senders drop.
-    drop(task_tx);
-    if let Some(rx) = task_rx {
-        let mut seen = HashSet::new();
-        while let Ok(id) = rx.try_recv() {
-            if !seen.insert(id) {
-                duplicate_tasks.store(true, Ordering::SeqCst);
-            }
-        }
-    }
     if simulate_offline {
         wait_for_offline(
             &monitor,
@@ -335,10 +329,12 @@ fn benchmark_once(
             BENCH_OFFLINE_MAX_WAIT_MS,
         );
     }
-    stop_flag.store(true, Ordering::SeqCst);
-    monitor_thread
-        .join()
-        .expect("health monitor thread panicked");
+    if let Some(monitor_thread) = monitor_thread {
+        stop_flag.store(true, Ordering::Relaxed);
+        monitor_thread
+            .join()
+            .expect("health monitor thread panicked");
+    }
 
     // Drain any unexpected leftover tasks for validation reporting.
     let mut leftover = 0usize;
@@ -353,7 +349,7 @@ fn benchmark_once(
         0.0
     };
     let avg_zone_wait = if total_tasks > 0 {
-        zone_wait_us.load(Ordering::SeqCst) as f64 / total_tasks as f64
+        zone_wait_us.load(Ordering::Relaxed) as f64 / total_tasks as f64
     } else {
         0.0
     };
@@ -378,7 +374,7 @@ fn benchmark_once(
         leftover,
         max_occupancy: zone_metrics.max_occupancy(),
         zone_violation: zone_metrics.has_violation(),
-        duplicate_tasks: duplicate_tasks.load(Ordering::SeqCst),
+        duplicate_tasks: duplicate_tasks.load(Ordering::Relaxed),
         offline_count: monitor.offline_robots().len(),
     }
 }

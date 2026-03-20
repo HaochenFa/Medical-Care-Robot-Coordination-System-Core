@@ -17,6 +17,22 @@ fn run_demo_stdout() -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+fn run_bench_stdout(args: &[&str]) -> String {
+    let bin = env!("CARGO_BIN_EXE_project_blaze");
+    let output = Command::new(bin)
+        .args(args)
+        .output()
+        .expect("failed to run bench binary");
+    assert!(
+        output.status.success(),
+        "bench exited with non-zero status: {:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 /// Strip ANSI escape codes from a string for plain-text matching.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -110,4 +126,28 @@ fn demo_cli_deterministically_marks_fixed_target_offline() {
             "expected offline_robots to contain 1, got: {offline_line}"
         );
     }
+}
+
+#[test]
+fn bench_validate_reports_no_duplicates_or_zone_violation() {
+    let stdout = run_bench_stdout(&["bench", "4", "25", "2", "1", "validate"]);
+    let plain = strip_ansi(&stdout);
+
+    let zone_line = plain
+        .lines()
+        .find(|line| line.contains("zone_violation"))
+        .expect("zone_violation line missing");
+    assert!(
+        zone_line.contains("false"),
+        "expected zone_violation=false, got: {zone_line}"
+    );
+
+    let dup_line = plain
+        .lines()
+        .find(|line| line.contains("duplicate_tasks"))
+        .expect("duplicate_tasks line missing");
+    assert!(
+        dup_line.contains("false"),
+        "expected duplicate_tasks=false, got: {dup_line}"
+    );
 }
