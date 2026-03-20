@@ -18,7 +18,9 @@
 \usepackage{enumitem}
 \usepackage{listings}
 \usepackage{tikz}
+\usepackage{pgfplots}
 \usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc}
+\pgfplotsset{compat=1.18}
 
 \hypersetup{
   colorlinks=true,
@@ -57,7 +59,7 @@
 \maketitle
 
 \begin{abstract}
-Medical Care Robot Coordination System (MCRoCS, ``McRocks'') is a lightweight operating-system core for coordinating multiple medical-care robots with safe concurrency. The system implements exactly three required services: a thread-safe task queue, exclusive zone access control, and a heartbeat-based health monitor. The main challenges were avoiding race conditions while keeping critical sections small and ensuring that offline detection was observable in a short demo. The solution uses Rust's \texttt{Mutex} and \texttt{Condvar} to serialize access to shared state, plus atomics for lightweight counters inside the simulation \citep{rustmutex,rustcondvar}. A CLI-driven demo shows multiple robots fetching tasks concurrently, entering zones without overlap, and a robot timing out after it stops heartbeats. Benchmarks and stress sweeps report throughput, zone wait times, and CPU usage, while tests validate single-consumer task behavior, zone exclusivity, and timeout detection. The result is a minimal, correct coordination layer aligned with the project's OS learning outcomes and refined to reduce benchmark overhead without expanding the project's scope.
+Medical Care Robot Coordination System (MCRoCS, ``McRocks'') is a lightweight operating-system core that coordinates medical-care robots with safe concurrency. It implements exactly the three Project Blaze services: a thread-safe task queue, exclusive zone access control, and a heartbeat-based health monitor. The main challenge was preserving correctness under concurrent threads while keeping the synchronization logic small enough to explain and test. The design uses Rust's \texttt{Mutex} and \texttt{Condvar} for shared-state coordination, while atomics are reserved for simulation metrics and validation \citep{rustmutex,rustcondvar}. The CLI demo deterministically shows concurrent task requests, non-overlapping zone occupancy, and an offline robot detected after missed heartbeats. Fresh release-mode benchmarks report throughput, zone-wait latency, and CPU time across contention, scalability, and offline scenarios; tests verify no duplicate task consumption, zone exclusivity, and timeout detection. The result is a minimal, explainable coordination layer aligned with the project's operating-systems objectives.
 \end{abstract}
 
 \section{Introduction}
@@ -65,7 +67,7 @@ Modern hospitals increasingly rely on autonomous robots for delivery, sanitation
 
 The project objectives are closely tied to operating-systems fundamentals. First, it must implement correct concurrency control so that shared state remains consistent under multiple threads. Second, it must use explicit synchronization to prevent race conditions. Third, it must coordinate the interactions among threads to produce a predictable, observable outcome that can be demonstrated in a short runtime. The minimal scope is intentional: by removing preemption and complex scheduling policies, the design keeps focus on safety invariants and synchronization correctness. This also makes it possible to reason about system state transitions and to write tests that are both meaningful and deterministic.
 
-The implementation is a Rust Cargo project organized around three core modules, plus a simulation driver. Each component uses safe synchronization primitives (\texttt{Mutex}, \texttt{Condvar}, and atomics) and follows a narrow-lock-scope design to minimize contention and avoid deadlocks. Rust's ownership model and standard library concurrency support help enforce data-race freedom by construction \citep{klabnik2022}. The simulation spawns multiple robot threads, drives task consumption, enforces zone ownership, and checks for offline robots in both deterministic demo mode and benchmark/stress offline mode. The command-line interface supports a default demo as well as benchmark and stress modes that print human-readable summaries and tables for analysis. This report details the design, implementation, and evaluation of the project and connects the observed behaviors to OS-level concurrency concepts.
+The implementation is a Rust Cargo project organized around three core modules, plus a simulation driver. The core coordination path uses \texttt{Mutex} and \texttt{Condvar} with narrow lock scopes; atomics appear only in the simulation harness for metrics and validation. Rust's ownership model and standard library concurrency support help enforce data-race freedom by construction \citep{klabnik2022}. The simulation spawns multiple robot threads, drives task consumption, enforces zone ownership, and checks for offline robots in both deterministic demo mode and benchmark/stress offline mode. The command-line interface supports a default demo as well as benchmark and stress modes that print human-readable summaries and tables for analysis. This report details the design, implementation, and evaluation of the project and connects the observed behaviors to OS-level concurrency concepts.
 
 \section{Related Works}
 Concurrency control has been a central operating-systems concern since early multiprogramming. Seminal work on mutual exclusion and synchronization, including Dijkstra's and Lamport's classic algorithms, established the need for explicit coordination when multiple execution contexts share resources \citep{dijkstra1965,lamport1978}. Practical guidance on programming with threads reinforced these principles for real systems \citep{birrell1989}. Monitors and condition variables, popularized in systems like Mesa, formalized a practical pattern: a shared state protected by a lock, with threads waiting on conditions that are re-checked after waking \citep{hoare1974,lampson1980}. MCRoCS uses this pattern directly, with \texttt{Mutex}-guarded state and \texttt{Condvar} waits for both task queues and zone access \citep{rustmutex,rustcondvar}. This mirrors the approach described in modern OS texts that emphasize correct locking, short critical sections, and explicit wait conditions \citep{arpaci2018,silberschatz2018,tanenbaum2015}.
@@ -107,8 +109,8 @@ MCRoCS is organized around a CLI entry point and three execution modes (demo, be
     % Sync-detail nodes (one per service)
     \node[box, text width=40mm] (tqsync) at (13.2,  1.7)
       {\texttt{Mutex\textless VecDeque\textless Task\textgreater\textgreater}\\+ Condvar};
-    \node[box, text width=42mm] (zasync) at (13.2,  0.0)
-      {\texttt{Mutex\textless Vec\textless Option\textless RobotId\textgreater\textgreater\textgreater}\\+ Vec\textless Condvar\textgreater\ (1-indexed per-zone)};
+    \node[box, text width=46mm] (zasync) at (13.2,  0.0)
+      {\texttt{Mutex\textless Vec\textless Option\textless}\\\texttt{RobotId\textgreater\textgreater\textgreater}\\+ \texttt{Vec\textless Condvar\textgreater}\ (1-indexed per-zone)};
     \node[box, text width=42mm] (hmsync) at (13.2, -1.7)
       {\texttt{Mutex\textless HealthState\textgreater}\\\texttt{heartbeats: HashMap}\\\texttt{offline: HashSet}};
 
@@ -412,11 +414,9 @@ The design enforces the required safety invariants:
 
 \section{Benchmark}
 \subsection{Methodology}
-Benchmarks were run on 2026-03-20 on macOS (Darwin 25.3.0, arm64) using \texttt{rustc 1.93.0}. Each run used the release build (\texttt{cargo\allowbreak\ run\allowbreak\ --release\allowbreak\ --\allowbreak bench\allowbreak\ ...}) with validation enabled; one configuration enabled offline mode to produce a liveness signal. For the benchmark summary table, three release-mode runs were recorded per configuration and reported as mean \(\pm\) standard deviation. The harness assigns a fixed number of tasks to robot threads, each of which acquires a zone, sleeps for \texttt{work\_ms}, and releases the zone.
+Benchmarks were measured on 2026-03-20 on macOS (Darwin 25.3.0, arm64) using \texttt{rustc 1.93.0}. Before collecting performance data, the required correctness gates were re-run: \texttt{cargo build --release} completed successfully and \texttt{cargo test} passed all 17 tests. All published numbers were then collected from the release binary (\texttt{./target/release/project\_blaze bench ...}) with the \texttt{validate} flag enabled, which keeps duplicate-task and zone-violation checks active during measurement.
 
-Metrics include elapsed time, throughput, average zone wait, CPU user/system time (Unix only), and validation flags. CPU usage is derived from \texttt{getrusage} on Unix platforms and reported as a start/end delta. The test suite currently includes 17 tests (14 unit tests plus 3 CLI integration tests) and is used as the correctness gate before performance runs.
-
-The measurement protocol separates safety evidence from performance evidence. Safety evidence comes from invariant-oriented outputs (\texttt{zone\_violation}, \texttt{duplicate\_tasks}, and offline indicators), while performance evidence comes from throughput, elapsed time, and waiting latency. This separation is important because timing can vary between runs even when synchronization is correct. For offline-enabled benchmark and stress runs, the interpretation rule is \texttt{offline\_robots >= 1} rather than exactly one, since additional robots can naturally age past timeout near run completion. In contrast, the default demo uses a deterministic offline target for clear pass/fail grading. This distinction prevents misclassification of a correct run as a failure and keeps evaluation criteria consistent with the implemented runtime semantics.
+To reduce coupling between rows, each published configuration was executed as five isolated benchmark runs rather than copied from one long stress sweep. The tables report mean \(\pm\) sample standard deviation for elapsed time, throughput, average zone wait, and CPU time. CPU user/system values come from a Unix \texttt{getrusage} delta and therefore support relative comparison on this machine rather than cross-platform claims. The benchmark output also reports \texttt{max\_occupancy}, \texttt{zone\_violation}, \texttt{duplicate\_tasks}, and \texttt{offline\_robots}, so each timing result is paired with an explicit correctness signal. Offline-mode data is interpreted as ``at least one robot detected offline''; unlike the demo, the benchmark does not target a fixed robot identity.
 
 \begin{figure}[H]
 \centering
@@ -428,12 +428,12 @@ The measurement protocol separates safety evidence from performance evidence. Sa
 ]
   \node[box] (a) {Start benchmark/stress run};
   \node[decision, below=of a] (b) {offline-demo\\enabled?};
-  \node[box, below left=of b] (c) {Normal run\\(no monitor thread)};
-  \node[box, below right=of b] (d) {Spawn monitor thread\\Robot 0 stops heartbeats\\after \texttt{tasks\_per\_robot/2}};
+  \node[box, below left=of b] (c) {Normal run\\all robots keep heartbeats};
+  \node[box, below right=of b] (d) {Spawn monitor thread\\robot 0 stops heartbeats\\after \texttt{tasks\_per\_robot/2}};
   \node[box, below=11mm of b] (e) {Workers finish tasks};
-  \node[box, below=of e] (f) {wait\_for\_offline(any, 500ms)};
-  \node[box, below=of f] (g) {Collect\\offline\_robots count};
-  \node[box, below=of g] (h) {Emit formatted result row};
+  \node[box, below=of e] (f) {\texttt{wait\_for\_offline(any,}\\\texttt{timeout=500ms, max\_wait=1000ms)}};
+  \node[box, below=of f] (g) {Collect\\\texttt{offline\_robots}};
+  \node[box, below=of g] (h) {Emit benchmark/stress row};
 
   \draw[arr] (a) -- (b);
   \draw[arr] (b) -- node[above left]{no} (c);
@@ -444,115 +444,114 @@ The measurement protocol separates safety evidence from performance evidence. Sa
   \draw[arr] (f) -- (g);
   \draw[arr] (g) -- (h);
 \end{tikzpicture}
-\caption{Benchmark/stress offline mode semantics aligned with the current implementation.}
+\caption{Offline benchmark semantics, updated to match the current implementation and \texttt{DIAGRAMS.md}.}
 \label{fig:bench-offline-flow}
 \end{figure}
 
-\subsection{Benchmark results (multi-shot summary)}
-The tables below summarize three release-mode runs per configuration (mean \(\pm\) standard deviation). The selected configurations show baseline contention (4 robots, 2 zones), heavier contention (8 robots, 2 zones), improved parallelism from additional zones (8 robots, 4 zones), and offline-demo overhead on the baseline case.
+\subsection{Results}
+Table~\ref{tab:bench-samples} summarizes four representative scenarios. The baseline and high-contention cases use the same work per task, so their nearly identical throughput is expected: with only two zones, the extra robots mainly increase waiting rather than useful parallel work. Expanding from two zones to four almost doubles throughput and keeps average wait far below the 8-robot/2-zone case, showing that the synchronization design allows additional concurrency when independent resources exist. Offline mode has the lowest throughput because the run intentionally waits for liveness timeout detection after the workload completes; this cost is a property of the measurement scenario, not a safety failure.
 
 \begin{table}[H]
 \centering
 \small
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{rrrrrrrr}
+\setlength{\tabcolsep}{5pt}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrrrr}
 \toprule
-Robots & Tasks/robot & Zones & Work (ms) & Offline & Elapsed (ms) & Throughput & Avg wait (\(\mu\)s) \\
+Scenario & Elapsed (ms) & Throughput (tasks/s) & Avg wait (\(\mu\)s) & CPU sys (s) \\
 \midrule
-4 & 25 & 2 & 5 & no  & 309.67 \(\pm\) 8.62  & 323.10 \(\pm\) 8.93  & 4185.04 \(\pm\) 1097.86 \\
-8 & 25 & 2 & 5 & no  & 620.33 \(\pm\) 12.74 & 322.50 \(\pm\) 6.55  & 11874.51 \(\pm\) 2030.96 \\
-8 & 25 & 4 & 5 & no  & 326.33 \(\pm\) 11.72 & 613.41 \(\pm\) 22.44 & 5225.34 \(\pm\) 166.13 \\
-4 & 25 & 2 & 5 & yes & 689.00 \(\pm\) 55.46 & 145.80 \(\pm\) 12.31 & 4514.37 \(\pm\) 627.11 \\
+4 robots, 25 tasks, 2 zones & 312.20 \(\pm\) 4.09 & 320.35 \(\pm\) 4.15 & 4254.90 \(\pm\) 1234.38 & 0.0016 \(\pm\) 0.0001 \\
+8 robots, 25 tasks, 2 zones & 624.60 \(\pm\) 10.81 & 320.28 \(\pm\) 5.47 & 12143.30 \(\pm\) 1236.06 & 0.0033 \(\pm\) 0.0001 \\
+8 robots, 25 tasks, 4 zones & 337.20 \(\pm\) 9.86 & 593.53 \(\pm\) 17.66 & 4951.34 \(\pm\) 288.69 & 0.0038 \(\pm\) 0.0001 \\
+4 robots, 25 tasks, 2 zones, offline & 707.60 \(\pm\) 48.53 & 141.91 \(\pm\) 10.71 & 4489.61 \(\pm\) 1010.36 & 0.0020 \(\pm\) 0.0002 \\
 \bottomrule
 \end{tabular}
-\caption{Benchmark performance metrics (mean \(\pm\) stdev over three runs).}
+}
+\caption{Five-run release-mode benchmark summary. In all rows, \texttt{zone\_violation=false} and \texttt{duplicate\_tasks=false}.}
 \label{tab:bench-samples}
 \end{table}
 
 \begin{table}[H]
 \centering
 \small
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{rrrrrrr}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{llrrr}
 \toprule
-Robots & Zones & Offline & CPU user (s) & CPU sys (s) & Max occ. & Offline robots \\
+Study & Config & Elapsed (ms) & Throughput (tasks/s) & Avg wait (\(\mu\)s) \\
 \midrule
-4 & 2 & no  & 0.0005 \(\pm\) 0.0001 & 0.0018 \(\pm\) 0.0002 & 2 & 0.00 \\
-8 & 2 & no  & 0.0010 \(\pm\) 0.0000 & 0.0034 \(\pm\) 0.0001 & 2 & 0.00 \\
-8 & 4 & no  & 0.0010 \(\pm\) 0.0001 & 0.0049 \(\pm\) 0.0002 & 4 & 0.00 \\
-4 & 2 & yes & 0.0007 \(\pm\) 0.0000 & 0.0027 \(\pm\) 0.0002 & 2 & 1.33 \(\pm\) 0.58 \\
+Robot/zone & 1 robot, 1 zone & 62.00 \(\pm\) 0.00 & 161.29 \(\pm\) 0.00 & 0.00 \(\pm\) 0.00 \\
+Robot/zone & 1 robot, 2 zones & 61.40 \(\pm\) 0.89 & 162.89 \(\pm\) 2.40 & 0.00 \(\pm\) 0.00 \\
+Robot/zone & 2 robots, 1 zone & 123.40 \(\pm\) 1.67 & 162.10 \(\pm\) 2.21 & 3082.60 \(\pm\) 71.94 \\
+Robot/zone & 2 robots, 2 zones & 61.60 \(\pm\) 0.55 & 324.70 \(\pm\) 2.90 & 18.15 \(\pm\) 18.60 \\
+Robot/zone & 4 robots, 1 zone & 245.40 \(\pm\) 1.82 & 163.00 \(\pm\) 1.21 & 9284.91 \(\pm\) 252.36 \\
+Robot/zone & 4 robots, 2 zones & 123.80 \(\pm\) 0.84 & 323.11 \(\pm\) 2.18 & 3886.03 \(\pm\) 753.62 \\
+Task load & 4 robots, 10 tasks, 2 zones & 124.80 \(\pm\) 3.11 & 320.67 \(\pm\) 7.83 & 4951.00 \(\pm\) 1120.75 \\
+Task load & 4 robots, 25 tasks, 2 zones & 311.40 \(\pm\) 1.67 & 321.14 \(\pm\) 1.72 & 4184.38 \(\pm\) 1093.14 \\
+Task load & 4 robots, 50 tasks, 2 zones & 632.40 \(\pm\) 15.52 & 316.40 \(\pm\) 7.59 & 5311.44 \(\pm\) 720.11 \\
 \bottomrule
 \end{tabular}
-\caption{CPU and correctness summary for the same benchmark configurations (zone violations and duplicate tasks were false in all runs).}
-\label{tab:bench-cpu}
-\end{table}
-
-\subsection{Scalability sweep}
-Two small stress sweeps provide a quick scalability snapshot (single run per point, \texttt{work=5 ms}). The first varies robots and zones at a fixed task load; the second varies task load while holding robots and zones constant.
-
-\begin{table}[H]
-\centering
-\small
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{rrrrrrc}
-\toprule
-Robots & Zones & Elapsed (ms) & Throughput & Avg wait (\(\mu\)s) & Max occ. & Zone viol. \\
-\midrule
-1 & 1 & 60 & 166.67 & 0.00 & 1 & false \\
-1 & 2 & 57 & 175.44 & 0.00 & 1 & false \\
-2 & 1 & 121 & 165.29 & 3000.55 & 1 & false \\
-2 & 2 & 61 & 327.87 & 60.50 & 2 & false \\
-4 & 1 & 247 & 161.94 & 9283.92 & 1 & false \\
-4 & 2 & 123 & 325.20 & 3598.93 & 2 & false \\
-\bottomrule
-\end{tabular}
-\caption{Robot/zone scalability sweep (single runs, \texttt{tasks/robot=10}).}
+\caption{Five-run scalability and task-load comparisons. \texttt{max\_occupancy} always matched the zone count, and no row produced violations or duplicates.}
 \label{tab:scalability}
 \end{table}
 
-\begin{table}[H]
-\centering
-\small
-\setlength{\tabcolsep}{6pt}
-\begin{tabular}{rrrrrrc}
-\toprule
-Robots & Tasks/robot & Zones & Elapsed (ms) & Throughput & Avg wait (\(\mu\)s) & Zone viol. \\
-\midrule
-4 & 10 & 2 & 123 & 325.20 & 3598.93 & false \\
-4 & 25 & 2 & 308 & 324.68 & 3065.35 & false \\
-4 & 50 & 2 & 616 & 324.68 & 4688.66 & false \\
-\bottomrule
-\end{tabular}
-\caption{Task-load sweep (single runs, fixed at 4 robots and 2 zones).}
-\label{tab:task-load}
-\end{table}
-
-\FloatBarrier
-
-\subsection{Graph (throughput by robots, zones=2)}
 \begin{figure}[H]
 \centering
-\begin{lstlisting}[language={},basicstyle=\ttfamily\small,frame=single]
-Robots: 1 | ################# (175)
-Robots: 2 | ################################ (328)
-Robots: 4 | ############################### (325)
-\end{lstlisting}
-\caption{ASCII throughput visualization from a sample sweep (zones=2, robots=1,2,4).}
-\label{fig:ascii-throughput}
+\begin{subfigure}[t]{0.49\linewidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,
+  height=5.6cm,
+  ybar,
+  bar width=10pt,
+  ymin=0,
+  ylabel={Throughput (tasks/s)},
+  symbolic x coords={4R/2Z,8R/2Z,8R/4Z,4R/2Z offline},
+  xtick=data,
+  x tick label style={rotate=20,anchor=east,font=\scriptsize},
+  nodes near coords,
+  nodes near coords align={vertical},
+  every node near coord/.append style={font=\scriptsize},
+]
+\addplot[fill=cyan!55] coordinates {
+  (4R/2Z,320.35)
+  (8R/2Z,320.28)
+  (8R/4Z,593.53)
+  (4R/2Z offline,141.91)
+};
+\end{axis}
+\end{tikzpicture}
+\caption{Headline scenarios.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.49\linewidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,
+  height=5.6cm,
+  ymin=0,
+  xlabel={Robots},
+  ylabel={Throughput (tasks/s)},
+  xtick={1,2,4},
+  legend style={at={(0.5,-0.25)},anchor=north,legend columns=2,font=\scriptsize},
+  grid=major,
+]
+\addplot+[mark=*] coordinates {(1,161.29) (2,162.10) (4,163.00)};
+\addplot+[mark=square*] coordinates {(1,162.89) (2,324.70) (4,323.11)};
+\legend{1 zone, 2 zones}
+\end{axis}
+\end{tikzpicture}
+\caption{Robot/zone scaling.}
+\end{subfigure}
+\caption{LaTeX-native charts replacing the earlier ASCII visualization.}
+\label{fig:bench-charts}
 \end{figure}
 
-\subsection{Correctness and stress observations}
-Each benchmark row summarizes three executions; short workloads are sensitive to scheduling noise, so the standard deviations provide a rough stability check. The relative trends were stable: adding robots without adding zones increased waiting time much more than it increased throughput, while adding zones restored parallelism. The offline-enabled benchmark showed a longer elapsed time because the harness waits for the timeout window to elapse before terminating the monitor thread.
+\subsection{Interpretation}
+The fresh measurements support three conclusions. First, correctness remained stable throughout the evaluation: duplicate-task detection never triggered, zone exclusivity never failed, and offline mode consistently reported one offline robot in the designated liveness scenario. Second, contention is the dominant performance bottleneck. With one zone, throughput stays near 162 tasks/s as robots increase because threads spend more time waiting for the same protected resource. With two zones, throughput roughly doubles at 2 and 4 robots, which confirms that the synchronization design is not serializing unrelated zone accesses. Third, task-load growth is close to linear in elapsed time while throughput stays near 320 tasks/s for the 4-robot/2-zone configuration; this suggests that the coordination costs are largely steady-state rather than startup-driven. These trends are exactly what a minimal mutex-and-condition-variable design should exhibit: safe sharing first, then parallel speedup only when independent zones are available.
 
-\begin{itemize}[leftmargin=*]
-  \item \textbf{Task safety:} No duplicate tasks were observed in any run; the validation flag remained false. This matches the queue's unit tests and indicates correct single-consumer behavior.
-  \item \textbf{Zone exclusivity:} No zone violations were observed; per-zone occupancy counters never exceeded one, and max occupancy never exceeded the zone count.
-  \item \textbf{Offline detection:} In deterministic demo mode, the fixed target robot is detected offline. In benchmark/stress offline mode, the final value is interpreted as \texttt{offline\_robots >= 1} because multiple robots may exceed timeout near run end.
-\end{itemize}
-
-Overall, throughput scales more strongly with additional zones than with additional robots alone. Moving from 8 robots / 2 zones to 8 robots / 4 zones raised mean throughput from 322.50 to 613.41 tasks/s while cutting average zone wait from 11874.51 to 5225.34 \(\mu\)s. The task-load sweep shows that with 4 robots and 2 zones fixed, throughput stays in a narrow 325 tasks/s band as \texttt{tasks/robot} increases from 10 to 50, while elapsed time grows roughly linearly with total work. This indicates that the optimized implementation has reduced some fixed benchmark overhead and that contention, not startup cost, is now the dominant limiter.
-
-To further contextualize the numbers, the robot/zone sweep shows that doubling zones from 1 to 2 roughly doubled throughput at 2 robots (165.29 to 327.87 tasks/s) and similarly improved the 4-robot case (161.94 to 325.20 tasks/s), reflecting reduced blocking. The task-load sweep complements this by showing that longer runs do not introduce duplicate-task or zone-safety failures, even as total work increases. These observations align with the expected behavior of a mutex-protected resource manager: contention is the primary driver of queueing delay, adding independent resources restores parallelism, and larger workloads mostly expose steady-state coordination costs rather than correctness failures.
+The CPU-time columns reinforce that interpretation. System time rises from about 0.0016\,s in the baseline case to 0.0038\,s in the 8-robot/4-zone case, which is consistent with more successful lock acquisitions and zone transitions rather than busy waiting. Offline mode is different: its average zone wait stays in the same order of magnitude as the normal 4-robot/2-zone run, but total elapsed time expands because the harness deliberately waits for timeout confirmation after the work has completed. A cross-check with the CLI stress sweep showed the same qualitative pattern as the repeated single-run measurements, so the reported tables capture stable behavior rather than a one-off schedule artifact.
 
 \section{Discussion}
 The core goal of the project is correctness in concurrency, and the implementation meets this requirement by applying straightforward synchronization patterns. The task queue demonstrates a classic producer-consumer solution with a mutex and condition variable, yielding deterministic, single-consumer behavior. The zone controller models exclusive resource ownership, ensuring that a robot must explicitly acquire and release a zone, a pattern familiar from lock managers in systems and databases. The health monitor illustrates a watchdog-style approach to liveness detection and shows how timeout-driven logic can be implemented safely with a single mutex-protected state for heartbeat timestamps and offline markers.
@@ -564,6 +563,8 @@ The benchmark instrumentation confirms that per-zone occupancy never exceeded on
 Another trade-off involves the heartbeat timeout. A shorter timeout improves detection speed but risks marking a slow robot offline. The demo uses short timeouts to make the offline event visible, whereas a real deployment would choose a longer threshold and possibly incorporate adaptive timing. The current design keeps this parameter explicit and configurable at the simulation level, which makes the timing assumptions transparent and easier to justify in a report.
 
 From a software engineering perspective, Rust's ownership model and standard synchronization primitives promote safe concurrency. The use of \texttt{Arc} for shared ownership together with \texttt{Mutex} and \texttt{Condvar} avoids data races without requiring unsafe code. The design avoids inconsistent lock ordering, which eliminates deadlock cycles and keeps critical sections short. Recent internal optimizations preserved this simplicity: direct-indexed zone ownership, a single-lock health monitor, and a lower-overhead validation path improved benchmark behavior without introducing feature creep. This aligns with the project's decision rule of correctness over performance and supports the learning outcome that synchronization should be explicit and simple when possible.
+
+Alternative primitives were considered but were less appropriate for this workload. An \texttt{RwLock} would add mode-switching complexity without much benefit because queue pops, zone ownership changes, and heartbeat updates are all write-heavy operations. Message-passing channels could replace the task queue, but they would not remove the need for shared zone ownership and timeout bookkeeping. For this project, a uniform \texttt{Mutex}+\texttt{Condvar} approach kept the coordination story easier to verify, benchmark, and explain \citep{rustmutex,rustcondvar,herlihy2020}.
 
 A limitation of the current evaluation is that benchmarks are short and focused on synchronization behavior rather than sustained load. Longer runs would reduce noise in throughput and CPU measurements, and repeated trials would allow confidence intervals. Additionally, the simulation uses a fixed work duration and deterministic task-to-zone mapping, which simplifies analysis but does not capture heterogeneous task costs or dynamic zone selection. These constraints are acceptable for the minimal scope but should be revisited if the system evolves toward more realistic scheduling. From a dependability perspective, the current evaluation focuses on safety and correctness rather than on formal reliability or availability metrics \citep{avizienis2004}.
 
@@ -583,7 +584,7 @@ In its current form, the system is already suitable for the required demo and re
 \begin{thebibliography}{99}
 \bibitem[Arpaci-Dusseau \& Arpaci-Dusseau(2023)]{arpaci2018} Arpaci-Dusseau, R. H., \& Arpaci-Dusseau, A. C. (2023). \textit{Operating Systems: Three Easy Pieces} (Version 1.10). Arpaci-Dusseau Books. Retrieved February 2, 2026, from https://pages.cs.wisc.edu/~remzi/OSTEP/
 \bibitem[Birrell(1989)]{birrell1989} Birrell, A. D. (1989). \textit{An Introduction to Programming with Threads}. Digital Equipment Corporation.
-\bibitem[Dijkstra(n.d.)]{dijkstra1965} Dijkstra, E. W. (n.d.). \textit{Cooperating sequential processes (EWD 123)}. Retrieved February 2, 2026, from https://www.cs.utexas.edu/~EWD/transcriptions/EWD01xx/EWD123.html
+\bibitem[Dijkstra(1965)]{dijkstra1965} Dijkstra, E. W. (1965). \textit{Cooperating sequential processes} (EWD 123). E. W. Dijkstra Archive, The University of Texas at Austin. Retrieved March 20, 2026, from https://www.cs.utexas.edu/~EWD/transcriptions/EWD01xx/EWD123.html
 \bibitem[Downey(2016)]{downey2016} Downey, A. B. (2016). \textit{The Little Book of Semaphores} (2nd ed.). Green Tea Press.
 \bibitem[Hoare(1974)]{hoare1974} Hoare, C. A. R. (1974). Monitors: An operating system structuring concept. \textit{Communications of the ACM, 17}(10), 549--557.
 \bibitem[Lampson \& Redell(1980)]{lampson1980} Lampson, B. W., \& Redell, D. D. (1980). Experience with processes and monitors in Mesa. \textit{Communications of the ACM, 23}(2), 105--117.
@@ -600,7 +601,7 @@ In its current form, the system is already suitable for the required demo and re
 \bibitem[Gray \& Reuter(1993)]{gray1993} Gray, J., \& Reuter, A. (1993). \textit{Transaction Processing: Concepts and Techniques}. Morgan Kaufmann.
 \bibitem[Lynch(1996)]{lynch1996} Lynch, N. (1996). \textit{Distributed Algorithms}. Morgan Kaufmann.
 \bibitem[Chandra \& Toueg(1996)]{chandra1996} Chandra, T. D., \& Toueg, S. (1996). Unreliable failure detectors for reliable distributed systems. \textit{Journal of the ACM, 43}(2), 225--267.
-\bibitem[Avizienis et~al.(2004)]{avizienis2004} Avizienis, A., Laprie, J.-C., Randell, B., \& Landwehr, C. (2004). \textit{Basic concepts and taxonomy of dependable and secure computing} (Technical Report No. UMIACS-TR-2004-47). University of Maryland, Institute for Systems Research. Retrieved February 2, 2026, from https://drum.lib.umd.edu/items/6b297ffc-373b-404f-be3a-70cc849e21fd
+\bibitem[Avizienis et~al.(2004)]{avizienis2004} Avizienis, A., Laprie, J.-C., Randell, B., \& Landwehr, C. E. (2004). Basic concepts and taxonomy of dependable and secure computing. \textit{IEEE Transactions on Dependable and Secure Computing, 1}(1), 11--33. https://doi.org/10.1109/TDSC.2004.2
 \end{thebibliography}
 
 \end{document}
