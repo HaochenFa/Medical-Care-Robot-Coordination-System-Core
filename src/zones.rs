@@ -8,20 +8,29 @@ use crate::types::{RobotId, ZoneId};
 /// Tracks zone ownership and blocks until zones become available.
 pub struct ZoneAccess {
     occupied: Mutex<HashMap<ZoneId, RobotId>>,
-    available: Condvar,
+    condvars: Vec<Condvar>,
 }
 
 impl ZoneAccess {
-    /// Create a new, empty zone-access controller.
-    pub fn new() -> Self {
+    /// Create a new zone-access controller with per-zone condvars for n zones.
+    /// Zones are 1-indexed; index 0 is allocated but unused.
+    pub fn new_with_zones(n: usize) -> Self {
+        let condvars = (0..=n).map(|_| Condvar::new()).collect();
         Self {
             occupied: Mutex::new(HashMap::new()),
-            available: Condvar::new(),
+            condvars,
         }
+    }
+
+    /// Create a new, empty zone-access controller (default capacity: 256 zones).
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::new_with_zones(256)
     }
 
     /// Acquire the zone for a robot, blocking until the zone is free.
     pub fn acquire(&self, zone: ZoneId, robot: RobotId) {
+        let idx = zone as usize % self.condvars.len();
         let mut guard = self.occupied.lock().expect("zone mutex poisoned");
         loop {
             if !guard.contains_key(&zone) {
@@ -29,18 +38,19 @@ impl ZoneAccess {
                 return;
             }
             // Wait releases the lock; on wake, re-check the condition.
-            guard = self.available.wait(guard).expect("condvar wait failed");
+            guard = self.condvars[idx].wait(guard).expect("condvar wait failed");
         }
     }
 
     /// Release a zone; returns false if the caller is not the owner.
     pub fn release(&self, zone: ZoneId, robot: RobotId) -> bool {
+        let idx = zone as usize % self.condvars.len();
         let mut guard = self.occupied.lock().expect("zone mutex poisoned");
         match guard.get(&zone) {
             Some(owner) if *owner == robot => {
                 guard.remove(&zone);
-                // Wake all contenders so the next robot can acquire the zone.
-                self.available.notify_all();
+                // Wake one contender so the next robot can acquire the zone.
+                self.condvars[idx].notify_one();
                 true
             }
             Some(_) => {

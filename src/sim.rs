@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -85,14 +85,15 @@ fn spawn_health_monitor(
 /// Wait until at least one robot is offline or a max wait is reached.
 fn wait_for_offline(monitor: &HealthMonitor, timeout_ms: u64, max_wait_ms: u64) {
     let max_wait = Duration::from_millis(max_wait_ms);
-    let poll = Duration::from_millis(OFFLINE_POLL_MS);
     let timeout = Duration::from_millis(timeout_ms);
     let start = Instant::now();
     loop {
         if monitor.detect_offline_any(timeout) || start.elapsed() >= max_wait {
             return;
         }
-        thread::sleep(poll);
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        let remaining_ms = timeout_ms.saturating_sub(elapsed_ms).max(1);
+        thread::sleep(Duration::from_millis(OFFLINE_POLL_MS.min(remaining_ms)));
     }
 }
 
@@ -105,7 +106,6 @@ fn wait_for_specific_offline(
     max_wait_ms: u64,
 ) -> bool {
     let max_wait = Duration::from_millis(max_wait_ms);
-    let poll = Duration::from_millis(OFFLINE_POLL_MS);
     let timeout = Duration::from_millis(timeout_ms);
     let start = Instant::now();
     loop {
@@ -120,7 +120,9 @@ fn wait_for_specific_offline(
         if start.elapsed() >= max_wait {
             return false;
         }
-        thread::sleep(poll);
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        let remaining_ms = timeout_ms.saturating_sub(elapsed_ms).max(1);
+        thread::sleep(Duration::from_millis(OFFLINE_POLL_MS.min(remaining_ms)));
     }
 }
 
@@ -233,7 +235,7 @@ fn benchmark_once(
     debug_assert!(zones_total > 0, "zones_total must be > 0");
     let zones_len = zones_total as usize;
     let queue = Arc::new(TaskQueue::new());
-    let zones = Arc::new(ZoneAccess::new());
+    let zones = Arc::new(ZoneAccess::new_with_zones(zones_len));
     let monitor = Arc::new(HealthMonitor::new());
     let stop_flag = Arc::new(AtomicBool::new(false));
 
@@ -249,10 +251,11 @@ fn benchmark_once(
     let zone_wait_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let zone_metrics = Arc::new(ZoneMetrics::new(zones_len));
     let duplicate_tasks = Arc::new(AtomicBool::new(false));
-    let seen_tasks = if validate {
-        Some(Arc::new(Mutex::new(HashSet::new())))
+    let (task_tx, task_rx) = if validate {
+        let (tx, rx) = mpsc::channel::<u64>();
+        (Some(tx), Some(rx))
     } else {
-        None
+        (None, None)
     };
 
     for robot_id in 0..robots {
@@ -275,8 +278,7 @@ fn benchmark_once(
         let zone_wait_us = Arc::clone(&zone_wait_us);
         let monitor = Arc::clone(&monitor);
         let zone_metrics = Arc::clone(&zone_metrics);
-        let duplicate_tasks = Arc::clone(&duplicate_tasks);
-        let seen_tasks = seen_tasks.as_ref().map(Arc::clone);
+        let task_sender = task_tx.as_ref().map(|tx| tx.clone());
         handles.push(thread::spawn(move || {
             let stop_after = if simulate_offline && robots > 1 && robot_id == 0 {
                 tasks_per_robot / 2
@@ -286,11 +288,8 @@ fn benchmark_once(
             let mut completed = 0usize;
             while completed < tasks_per_robot {
                 let task = queue.pop_blocking_or_closed().expect("task queue closed");
-                if let Some(seen) = seen_tasks.as_ref() {
-                    let mut guard = seen.lock().expect("seen mutex poisoned");
-                    if !guard.insert(task.id) {
-                        duplicate_tasks.store(true, Ordering::SeqCst);
-                    }
+                if let Some(ref s) = task_sender {
+                    let _ = s.send(task.id);
                 }
                 let zone = (task.id % zones_total) + 1;
                 let wait_start = Instant::now();
@@ -318,6 +317,16 @@ fn benchmark_once(
 
     for handle in handles {
         handle.join().expect("benchmark thread panicked");
+    }
+    // Drop the original sender so the channel closes when all thread senders drop.
+    drop(task_tx);
+    if let Some(rx) = task_rx {
+        let mut seen = HashSet::new();
+        while let Ok(id) = rx.try_recv() {
+            if !seen.insert(id) {
+                duplicate_tasks.store(true, Ordering::SeqCst);
+            }
+        }
     }
     if simulate_offline {
         wait_for_offline(
@@ -385,12 +394,12 @@ pub fn run_demo() {
     log_dev!("[DEMO] start");
 
     let queue = Arc::new(TaskQueue::new());
-    let zones = Arc::new(ZoneAccess::new());
-    let monitor = Arc::new(HealthMonitor::new());
-
     let robots = 3;
     let tasks_per_robot = 3;
     let zones_total = 2;
+    let zones = Arc::new(ZoneAccess::new_with_zones(zones_total));
+    let monitor = Arc::new(HealthMonitor::new());
+
     let offline_target = DEMO_OFFLINE_TARGET_ROBOT;
     assert!(
         (offline_target as usize) < robots,

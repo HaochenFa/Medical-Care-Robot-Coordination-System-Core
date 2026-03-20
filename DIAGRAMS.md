@@ -28,15 +28,15 @@ flowchart TD
     STRESS --> BENCH
 
     TQ --> TQSYNC["Mutex&lt;VecDeque&lt;Task&gt;&gt; + Condvar"]
-    ZA --> ZASYNC["Mutex&lt;HashMap&lt;ZoneId, RobotId&gt;&gt; + Condvar"]
-    HM --> HMSYNC["Mutex&lt;HealthState&gt; (last_seen + offline)"]
+    ZA --> ZASYNC["Mutex&lt;HashMap&lt;ZoneId, RobotId&gt;&gt; + Vec&lt;Condvar&gt; (per-zone)"]
+    HM --> HMSYNC["RwLock&lt;HashMap&gt; (heartbeats) + Mutex&lt;HashSet&gt; (offline)"]
 
     LOG["log_dev! macro (debug builds only)"]
     DEMO -.-> LOG
     BENCH -.-> LOG
 ```
 
-Note: `log_dev!` emits structured logs in debug builds and is a no-op in release. It is used throughout `sim.rs` — dashed lines indicate optional/debug-only coupling.
+Note: `log_dev!` emits structured logs in debug builds and is a no-op in release. It is used throughout `sim.rs` — dashed lines indicate optional/debug-only coupling. `ZoneAccess` uses per-zone `Condvar`s (indexed by `zone % len`) so `notify_one` wakes only contenders for the released zone. `HealthMonitor` uses a split-lock: `RwLock` for concurrent heartbeat reads and a separate `Mutex` for the offline set.
 
 ## 2) Demo Flow (Deterministic Offline Target)
 
@@ -108,28 +108,31 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["Robot calls acquire(zone, robot)"] --> LOCK["Lock Mutex"]
-    LOCK --> OCC{"zone in occupied map?"}
+    LOCK --> IDX["Compute condvar index\n(zone % condvars.len())"]
+    IDX --> OCC{"zone in occupied map?"}
     OCC -- "no" --> INSERT["Insert zone → robot_id"]
     INSERT --> UNLOCK_A["Unlock, return"]
-    OCC -- "yes" --> WAIT["Condvar::wait (releases lock)"]
+    OCC -- "yes" --> WAIT["condvars[idx].wait (releases lock)"]
     WAIT --> OCC
 
     R["Robot calls release(zone, robot)"] --> LOCKR["Lock Mutex"]
     LOCKR --> OWNER{"caller is owner?"}
     OWNER -- "yes" --> REMOVE["Remove zone from map"]
-    REMOVE --> NOTIFYALL["notify_all (wake contenders)"]
-    NOTIFYALL --> UNLOCK_R["Unlock, return true"]
+    REMOVE --> NOTIFYONE["condvars[idx].notify_one (wake one waiter)"]
+    NOTIFYONE --> UNLOCK_R["Unlock, return true"]
     OWNER -- "no / unoccupied" --> FALSE["return false (caller error)"]
 ```
 
 ## 5) HealthMonitor State Transitions
 
+The monitor uses a split-lock design: `RwLock<HashMap<RobotId, Instant>>` for heartbeat timestamps (allowing concurrent reads during detection) and a separate `Mutex<HashSet<RobotId>>` for the offline set.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Unregistered
     Unregistered --> Online: register_robot() or heartbeat()
-    Online --> Online: heartbeat() — updates last_seen, clears offline mark
-    Online --> Offline: detect_offline() — last_seen older than timeout
+    Online --> Online: heartbeat() — write-locks heartbeats, clears offline mark
+    Online --> Offline: detect_offline() — read-locks heartbeats to scan, then write-locks offline set
     Offline --> Online: heartbeat() — clears offline mark
 ```
 

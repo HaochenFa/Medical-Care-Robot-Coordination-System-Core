@@ -100,7 +100,7 @@ MCRoCS is organized around a CLI entry point and three execution modes (demo, be
     \node[box, right=34mm of bench, text width=38mm] (core) {Core services\\TaskQueue\\ZoneAccess\\HealthMonitor};
     \node[box, below left=of core, text width=34mm] (tqsync) {TaskQueue sync\\Mutex + Condvar\\(VecDeque)};
     \node[box, below=of core, text width=34mm] (zasync) {ZoneAccess sync\\Mutex + Condvar\\(owner map)};
-    \node[box, below right=of core, text width=34mm] (hmsync) {HealthMonitor sync\\Mutex\\(last\_seen + offline)};
+    \node[box, below right=of core, text width=34mm] (hmsync) {HealthMonitor sync\\RwLock + Mutex\\(heartbeats + offline)};
 
     \draw[arr] (cli) -- (mode);
     \draw[arr] (mode) -- (demo);
@@ -143,23 +143,24 @@ pub fn pop_blocking_or_closed(&self) -> Option<Task> {
 The queue also supports \texttt{try\_pop} for non-blocking access and a \texttt{close} operation that wakes all blocked consumers. Tests validate that tasks are consumed exactly once across multiple threads, that blocking consumers wake on push, and that closure unblocks waiting threads. These tests directly target the invariants required by the project: single assignment of tasks and safe concurrent access.
 
 \subsection{Zone access control}
-The zone controller enforces exclusive occupancy per zone using a \texttt{Mutex<HashMap<ZoneId, RobotId>>} and a \texttt{Condvar} \citep{rustmutex,rustcondvar}. Each robot requests a zone and blocks until the zone is free. When the zone becomes available, the robot becomes the owner in the map and proceeds. Release removes the owner entry and notifies waiters.
+The zone controller enforces exclusive occupancy per zone using a \texttt{Mutex<HashMap<ZoneId, RobotId>>} and a vector of per-zone \texttt{Condvar}s \citep{rustmutex,rustcondvar}. Each zone maps to a condvar index via \texttt{zone \% condvars.len()}, so robots waiting on different zones do not wake each other up. When a zone becomes available, the owner calls \texttt{notify\_one} on that zone's condvar, waking exactly one contender rather than all waiters.
 
 \noindent\textbf{Critical code path (acquire):}
 \begin{lstlisting}
 pub fn acquire(&self, zone: ZoneId, robot: RobotId) {
+    let idx = zone as usize % self.condvars.len();
     let mut guard = self.occupied.lock().expect("zone mutex poisoned");
     loop {
         if !guard.contains_key(&zone) {
             guard.insert(zone, robot);
             return;
         }
-        guard = self.available.wait(guard).expect("condvar wait failed");
+        guard = self.condvars[idx].wait(guard).expect("condvar wait failed");
     }
 }
 \end{lstlisting}
 
-This approach keeps the lock scope short and avoids deadlocks because only one lock is held at a time. The design is intentionally conservative: it prioritizes correctness and explicit ownership tracking. Unit tests spawn multiple contenders for a single zone and verify that the observed occupancy never exceeds one. In release builds, non-owner release attempts are logged and rejected, preserving safety even without debug assertions.
+This approach keeps the lock scope short and avoids deadlocks because only one lock is held at a time. Per-zone condvars eliminate unnecessary wakeups when zones are independent, reducing contention under high concurrency. The design is intentionally conservative: it prioritizes correctness and explicit ownership tracking. Unit tests spawn multiple contenders for a single zone and verify that the observed occupancy never exceeds one. In release builds, non-owner release attempts are logged and rejected, preserving safety even without debug assertions.
 
 \begin{figure}[H]
   \centering
@@ -192,24 +193,27 @@ This approach keeps the lock scope short and avoids deadlocks because only one l
 \end{figure}
 
 \subsection{Health monitor}
-The health monitor tracks per-robot heartbeats with a \texttt{Mutex}-protected \texttt{HashMap} and \texttt{HashSet}. \texttt{last\_seen} timestamps record the most recent heartbeat per robot, and \texttt{offline} records robots that have exceeded the timeout. The monitor can be polled at any interval; in the simulation a background thread performs periodic checks while robots run. The implementation relies on monotonic timestamps for timeout comparison \citep{rustinstant}.
+The health monitor uses a split-lock design: a \texttt{RwLock<HashMap<RobotId, Instant>>} for heartbeat timestamps and a separate \texttt{Mutex<HashSet<RobotId>>} for the offline set \citep{rustmutex}. This allows multiple detection calls to read heartbeat timestamps concurrently (shared read lock), while the offline set is updated exclusively. The implementation relies on monotonic timestamps for timeout comparison \citep{rustinstant}.
 
 \noindent\textbf{Critical code path (offline detection):}
 \begin{lstlisting}
 pub fn detect_offline(&self, timeout: Duration) -> HashSet<RobotId> {
-    let mut guard = self.state.lock().expect("health monitor mutex poisoned");
     let now = Instant::now();
-    let overdue: Vec<RobotId> = guard
-        .last_seen
-        .iter()
-        .filter_map(|(&robot, &last)| {
-            if now.duration_since(last) > timeout { Some(robot) } else { None }
-        })
-        .collect();
+    let overdue: Vec<_> = {
+        self.heartbeats
+            .read()
+            .expect("heartbeats rwlock poisoned")
+            .iter()
+            .filter_map(|(&robot, &last)| {
+                if now.duration_since(last) > timeout { Some(robot) } else { None }
+            })
+            .collect()
+    };
+    let mut guard = self.offline.lock().expect("offline mutex poisoned");
     for robot in overdue {
-        guard.offline.insert(robot);
+        guard.insert(robot);
     }
-    guard.offline.clone()
+    guard.clone()
 }
 \end{lstlisting}
 
@@ -253,7 +257,7 @@ Benchmarks and stress runs reuse the same core logic and report elapsed time, th
 From an implementation perspective, the CLI also enforces strict input validation to keep experiments reproducible. Invalid values (for example zero robots or zero zones) are rejected with a clear usage message, and stress lists can preserve defaults through explicit placeholders. This reduces ambiguity during evaluation because graders can run the same commands and receive predictable behavior and diagnostics. Together with deterministic demo fields and machine-readable CSV outputs, these interface decisions improve traceability between source code, runtime evidence, and report claims.
 
 \subsection{Synchronization strategy and invariants}
-All shared mutable state is accessed under a single lock per component, avoiding multi-lock cycles and eliminating deadlock risks. The task queue and zone controller use condition variables to coordinate waiting without busy loops, while the health monitor uses a mutex to serialize heartbeat updates and offline detection. Lock scopes are kept tight to reduce contention. Atomics are used only for lightweight counters in the simulation and do not replace the fundamental locks that protect shared structures.
+All shared mutable state is accessed under a single lock per component, avoiding multi-lock cycles and eliminating deadlock risks. The task queue and zone controller use condition variables to coordinate waiting without busy loops. The zone controller uses per-zone condvars so that robots waiting on independent zones do not wake each other, reducing spurious contention. The health monitor uses a split-lock design: a \texttt{RwLock} allows concurrent heartbeat reads during offline detection, while a separate \texttt{Mutex} serializes updates to the offline set. Lock scopes are kept tight to reduce contention. The benchmark harness tracks duplicate tasks via an \texttt{mpsc} channel rather than a shared mutex, moving the deduplication check out of the hot path. Atomics are used only for lightweight counters in the simulation and do not replace the fundamental locks that protect shared structures.
 
 The design enforces the required safety invariants:
 \begin{itemize}[leftmargin=*]
@@ -265,7 +269,7 @@ The design enforces the required safety invariants:
 
 \section{Benchmark}
 \subsection{Methodology}
-Benchmarks were run on 2026-02-10 on macOS (Darwin 25.2.0, arm64) using \texttt{rustc 1.93.0}. Each run used the release build (\texttt{cargo\allowbreak\ run\allowbreak\ --release\allowbreak\ --\allowbreak bench\allowbreak\ ...}) with validation enabled; one configuration enabled offline mode to produce a liveness signal. For each configuration, one warm-up run was discarded and three measured runs were reported as mean \(\pm\) standard deviation. The harness assigns a fixed number of tasks to robot threads, each of which acquires a zone, sleeps for \texttt{work\_ms}, and releases the zone.
+Benchmarks were run on 2026-03-20 on macOS (Darwin 25.3.0, arm64) using \texttt{rustc 1.93.0}. Each run used the release build (\texttt{cargo\allowbreak\ run\allowbreak\ --release\allowbreak\ --\allowbreak bench\allowbreak\ ...}) with validation enabled; one configuration enabled offline mode to produce a liveness signal. For each configuration, one warm-up run was discarded and three measured runs were reported as mean \(\pm\) standard deviation. The harness assigns a fixed number of tasks to robot threads, each of which acquires a zone, sleeps for \texttt{work\_ms}, and releases the zone.
 
 Metrics include elapsed time, throughput, average zone wait, CPU user/system time (Unix only), and validation flags. CPU usage is derived from \texttt{getrusage} on Unix platforms and reported as a start/end delta. The test suite includes 13 tests (11 unit tests plus 2 CLI integration tests) and is used as the correctness gate before performance runs.
 
@@ -312,10 +316,10 @@ The tables below summarize three runs per configuration (mean \(\pm\) standard d
 \toprule
 Robots & Tasks/robot & Zones & Work (ms) & Elapsed (ms) & Throughput & Avg wait (\(\mu\)s) \\
 \midrule
-4 & 25 & 2 & 5 & 380.67 \(\pm\) 46.45 & 267.05 \(\pm\) 35.65 & 5136.88 \(\pm\) 265.01 \\
-8 & 25 & 2 & 5 & 657.33 \(\pm\) 49.98 & 305.94 \(\pm\) 22.07 & 15646.52 \(\pm\) 870.14 \\
-8 & 25 & 4 & 5 & 415.33 \(\pm\) 3.40 & 481.57 \(\pm\) 3.93 & 5371.72 \(\pm\) 111.14 \\
-4 & 25 & 2 & 5 & 723.67 \(\pm\) 3.68 & 138.19 \(\pm\) 0.70 & 5364.20 \(\pm\) 194.19 \\
+4 & 25 & 2 & 5 & 413.33 \(\pm\) 3.40 & 241.95 \(\pm\) 1.98 & 4182.57 \(\pm\) 1027.62 \\
+8 & 25 & 2 & 5 & 658.67 \(\pm\) 46.95 & 305.12 \(\pm\) 20.72 & 15010.46 \(\pm\) 2042.40 \\
+8 & 25 & 4 & 5 & 416.00 \(\pm\) 2.94 & 480.80 \(\pm\) 3.41 & 5337.05 \(\pm\) 162.71 \\
+4 & 25 & 2 & 5 & 694.00 \(\pm\) 48.81 & 144.85 \(\pm\) 10.72 & 4578.01 \(\pm\) 895.99 \\
 \bottomrule
 \end{tabular}
 \caption{Benchmark performance metrics (mean \(\pm\) stdev over three runs).}
@@ -330,10 +334,10 @@ Robots & Tasks/robot & Zones & Work (ms) & Elapsed (ms) & Throughput & Avg wait 
 \toprule
 Robots & Zones & CPU user (s) & CPU sys (s) & Max occ. & Offline \\
 \midrule
-4 & 2 & 0.0017 \(\pm\) 0.0001 & 0.0048 \(\pm\) 0.0006 & 2 & 0 \\
-8 & 2 & 0.0038 \(\pm\) 0.0000 & 0.0177 \(\pm\) 0.0015 & 2 & 0 \\
-8 & 4 & 0.0024 \(\pm\) 0.0000 & 0.0103 \(\pm\) 0.0007 & 4 & 0 \\
-4 & 2 & 0.0017 \(\pm\) 0.0001 & 0.0046 \(\pm\) 0.0003 & 2 & 1 \\
+4 & 2 & 0.0007 \(\pm\) 0.0001 & 0.0022 \(\pm\) 0.0004 & 2 & 0 \\
+8 & 2 & 0.0013 \(\pm\) 0.0001 & 0.0038 \(\pm\) 0.0004 & 2 & 0 \\
+8 & 4 & 0.0011 \(\pm\) 0.0004 & 0.0040 \(\pm\) 0.0016 & 4 & 0 \\
+4 & 2 & 0.0007 \(\pm\) 0.0002 & 0.0018 \(\pm\) 0.0006 & 2 & 1 \\
 \bottomrule
 \end{tabular}
 \caption{CPU and correctness summary for the same benchmark configurations (zone violations and duplicate tasks were false in all runs).}
@@ -351,12 +355,12 @@ A small stress sweep varying robots and zones (tasks/robot=10, work=5 ms) provid
 \toprule
 Robots & Zones & Elapsed (ms) & Throughput & Avg wait (\(\mu\)s) & Max occ. & Zone viol. \\
 \midrule
-1 & 1 & 105 & 95.24 & 0.10 & 1 & false \\
-1 & 2 & 105 & 95.24 & 0.30 & 1 & false \\
-2 & 1 & 208 & 96.15 & 4899.55 & 1 & false \\
-2 & 2 & 102 & 196.08 & 54.85 & 2 & false \\
-4 & 1 & 311 & 128.62 & 12662.92 & 1 & false \\
-4 & 2 & 210 & 190.48 & 4918.27 & 2 & false \\
+1 & 1 & 100 & 100.00 & 0.00 & 1 & false \\
+1 & 2 & 105 & 95.24 & 0.00 & 1 & false \\
+2 & 1 & 205 & 97.56 & 3136.25 & 1 & false \\
+2 & 2 & 105 & 190.48 & 0.70 & 2 & false \\
+4 & 1 & 309 & 129.45 & 9277.33 & 1 & false \\
+4 & 2 & 207 & 193.24 & 3450.12 & 2 & false \\
 \bottomrule
 \end{tabular}
 \caption{Scalability sweep (single runs).}
@@ -370,8 +374,8 @@ Robots & Zones & Elapsed (ms) & Throughput & Avg wait (\(\mu\)s) & Max occ. & Zo
 \centering
 \begin{lstlisting}[language={},basicstyle=\ttfamily\small,frame=single]
 Robots: 1 | ################ (95)
-Robots: 2 | ################################# (196)
-Robots: 4 | ################################ (190)
+Robots: 2 | ################################ (190)
+Robots: 4 | ################################ (193)
 \end{lstlisting}
 \caption{ASCII throughput visualization from a sample sweep (zones=2, robots=1,2,4).}
 \label{fig:ascii-throughput}
