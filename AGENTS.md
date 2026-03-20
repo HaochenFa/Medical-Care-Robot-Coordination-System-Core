@@ -1,66 +1,114 @@
 # AGENTS.md
 
-## Purpose and Authority
+## Purpose and Precedence
 
-This file defines strict, durable working rules aligned with `Project-B.pdf` and `project_B_guidelines.md`. If any conflict exists, those official documents are the source of truth and must be followed.
+This file is the durable instruction set for AI agents working in this repository.
 
-## Project Summary (Project Blaze)
+Use it for:
 
-Build a lightweight OS core that coordinates multiple medical-care robots safely and efficiently. The emphasis is on core OS concurrency concepts: concurrency control, synchronization, and coordination.
+- project scope boundaries,
+- correctness and synchronization invariants,
+- required quality gates,
+- documentation/update expectations.
 
-## Minimal Scope (Mandatory)
+Do not treat this file as a quick-start guide or an implementation snapshot. Fast-changing operational reference belongs in `CLAUDE.md`, while user-facing explanation belongs in `README.md`.
+
+If any conflict exists, follow this order:
+
+1. `Project-B.pdf`
+2. `project_B_guidelines.md`
+3. `AGENTS.md`
+4. `CLAUDE.md`
+5. `README.md`
+
+## Project Intent
+
+Project Blaze is a lightweight OS core for coordinating medical-care robots. The goal is to demonstrate core OS concepts through a small, clear Rust implementation:
+
+- concurrency control,
+- synchronization,
+- coordination.
+
+This is a teaching project, not a production scheduler.
+
+## Non-Negotiable Scope
 
 Implement exactly these three components:
 
-1. **Task queue**: store incoming tasks and allow robots to fetch tasks safely.
-2. **Zone access control**: prevent two robots from occupying the same zone at the same time.
-3. **Health monitor**: track robot heartbeats and mark missing robots as offline.
+1. Task queue
+2. Zone access control
+3. Health monitor
 
-Keep the design minimal. Do not implement preemption, deadlock prevention, or complex scheduling policies.
+Stay minimal. Do not expand the project into a larger OS or robotics platform.
 
-## Demonstration Requirements (Mandatory)
+Explicit non-goals:
 
-The demo must clearly show all three behaviors:
+- preemption,
+- deadlock-prevention frameworks,
+- complex scheduling policies,
+- speculative work stealing,
+- multi-zone routing/planning,
+- distributed coordination,
+- unrelated infrastructure or UI features.
 
-- Multiple robots concurrently requesting tasks.
-- Safe access to shared zones (no two robots in the same zone).
-- A robot timing out and being marked offline.
+## Demonstration Requirements
 
-## Core Concepts to Demonstrate (Mandatory)
+The runnable system must clearly show:
 
-- **Concurrency control**: safe access to shared state with threads.
-- **Synchronization**: preventing race conditions and inconsistent state.
-- **Coordination**: organizing multiple worker threads with clear ownership.
+- multiple robots concurrently requesting tasks,
+- safe shared-zone access with no overlapping occupancy,
+- a robot timing out and being marked offline.
 
-## Safety and Correctness Invariants (Must Always Hold)
+Implementation or optimization work is only acceptable if these three visible behaviors remain easy to demonstrate and explain.
 
-- A task is assigned/consumed at most once.
-- A zone is occupied by at most one robot at any time.
-- Offline robots are detected when heartbeat timeouts occur.
-- Shared state is accessed only under correct synchronization.
-- Critical sections are minimal and deadlock-free (consistent lock ordering).
+## Core Invariants
 
-## Implementation Rules (Strict)
+These must always hold:
 
-- Use safe Rust synchronization primitives (e.g., `Mutex`, `RwLock`, `Condvar`, channels).
-- Avoid unnecessary shared state; prefer clear ownership and narrow lock scopes.
-- Keep module structure readable and idiomatic.
-- Provide observable behavior (logs or outputs) for demo and debugging.
+- each task is assigned/consumed at most once,
+- each zone is occupied by at most one robot at a time,
+- heartbeat timeouts can mark robots offline,
+- shared mutable state is accessed only through correct synchronization,
+- critical sections stay small and deadlock-free,
+- correctness takes priority over performance.
 
-## Required Build and Test Gates
+When changing synchronization internals, preserve behavior before chasing speed.
 
-- `cargo build --release` must succeed.
-- `cargo test` must pass with meaningful coverage for:
-  - task queue safety and single-consumer behavior,
-  - zone exclusivity under concurrent access,
-  - heartbeat timeout/offline detection.
+## Agent Working Rules
 
-## Deliverables Awareness (Non-Code)
+- Prefer simple, idiomatic Rust synchronization primitives.
+- Prefer narrow lock scopes and clear ownership over clever concurrency.
+- Internal performance improvements are allowed only when they reduce contention or bookkeeping cost without changing project scope or public behavior.
+- Keep implementation details explainable in a short demo and written report.
+- Treat benchmark/stress improvements as supportive evidence, not as justification for feature creep.
+- If architecture changes, update any stale technical docs that describe the current implementation.
 
-- Written report must follow the required structure and word counts.
-- 3-minute video demo must show concurrency, synchronization, and safe coordination.
-- Maintain a reasonable commit history showing progress.
+## Required Gates
+
+Before considering work complete, ensure:
+
+- `cargo build --release` succeeds,
+- `cargo test` passes,
+- tests continue to cover:
+  - task queue single-consumer / no-duplicate behavior,
+  - zone exclusivity under contention,
+  - heartbeat timeout / offline detection.
+
+## Documentation Expectations
+
+Use each document for its intended role:
+
+- `AGENTS.md`: durable rules and repository policy for agents.
+- `CLAUDE.md`: quick reference for current commands, module map, and workflow memory.
+- `README.md`: human-facing project overview, usage, and verification steps.
+- `DIAGRAMS.md`: architecture and behavior diagrams that match the current code.
+
+Avoid duplicating volatile implementation detail in `AGENTS.md`. If code structure changes, update `CLAUDE.md`, `README.md`, and `DIAGRAMS.md` first, and only update `AGENTS.md` when the durable rules or project policy change.
 
 ## Decision Rule
 
-When uncertain, prioritize: **correctness > clarity > performance**. Always align with the official requirements.
+When uncertain, prioritize:
+
+**correctness > clarity > performance**
+
+If a change improves performance but makes the concurrency story harder to verify, demo, or explain, reject it.

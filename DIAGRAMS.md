@@ -28,15 +28,15 @@ flowchart TD
     STRESS --> BENCH
 
     TQ --> TQSYNC["Mutex&lt;VecDeque&lt;Task&gt;&gt; + Condvar"]
-    ZA --> ZASYNC["Mutex&lt;HashMap&lt;ZoneId, RobotId&gt;&gt; + Vec&lt;Condvar&gt; (per-zone)"]
-    HM --> HMSYNC["RwLock&lt;HashMap&gt; (heartbeats) + Mutex&lt;HashSet&gt; (offline)"]
+    ZA --> ZASYNC["Mutex&lt;Vec&lt;Option&lt;RobotId&gt;&gt;&gt; + Vec&lt;Condvar&gt; (1-indexed per zone)"]
+    HM --> HMSYNC["Mutex&lt;HealthState&gt; where HealthState = { heartbeats: HashMap, offline: HashSet }"]
 
     LOG["log_dev! macro (debug builds only)"]
     DEMO -.-> LOG
     BENCH -.-> LOG
 ```
 
-Note: `log_dev!` emits structured logs in debug builds and is a no-op in release. It is used throughout `sim.rs` — dashed lines indicate optional/debug-only coupling. `ZoneAccess` uses per-zone `Condvar`s (indexed by `zone % len`) so `notify_one` wakes only contenders for the released zone. `HealthMonitor` uses a split-lock: `RwLock` for concurrent heartbeat reads and a separate `Mutex` for the offline set.
+Note: `log_dev!` emits structured logs in debug builds and is a no-op in release. It is used throughout `sim.rs` — dashed lines indicate optional/debug-only coupling. `ZoneAccess` uses a fixed, 1-indexed zone table sized at construction time, so each zone maps directly to its own `Condvar`. `HealthMonitor` now keeps both heartbeat timestamps and the offline set inside one mutex-protected state so heartbeat and timeout detection update a single coherent structure.
 
 ## 2) Demo Flow (Deterministic Offline Target)
 
@@ -108,31 +108,31 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["Robot calls acquire(zone, robot)"] --> LOCK["Lock Mutex"]
-    LOCK --> IDX["Compute condvar index\n(zone % condvars.len())"]
-    IDX --> OCC{"zone in occupied map?"}
-    OCC -- "no" --> INSERT["Insert zone → robot_id"]
+    LOCK --> IDX["Validate zone and use 1-indexed slot"]
+    IDX --> OCC{"occupied[zone] is None?"}
+    OCC -- "yes" --> INSERT["Set occupied[zone] = Some(robot_id)"]
     INSERT --> UNLOCK_A["Unlock, return"]
-    OCC -- "yes" --> WAIT["condvars[idx].wait (releases lock)"]
+    OCC -- "no" --> WAIT["condvars[zone].wait (releases lock)"]
     WAIT --> OCC
 
     R["Robot calls release(zone, robot)"] --> LOCKR["Lock Mutex"]
-    LOCKR --> OWNER{"caller is owner?"}
-    OWNER -- "yes" --> REMOVE["Remove zone from map"]
-    REMOVE --> NOTIFYONE["condvars[idx].notify_one (wake one waiter)"]
+    LOCKR --> OWNER{"occupied[zone] == Some(robot)?"}
+    OWNER -- "yes" --> REMOVE["Set occupied[zone] = None"]
+    REMOVE --> NOTIFYONE["condvars[zone].notify_one (wake one waiter)"]
     NOTIFYONE --> UNLOCK_R["Unlock, return true"]
     OWNER -- "no / unoccupied" --> FALSE["return false (caller error)"]
 ```
 
 ## 5) HealthMonitor State Transitions
 
-The monitor uses a split-lock design: `RwLock<HashMap<RobotId, Instant>>` for heartbeat timestamps (allowing concurrent reads during detection) and a separate `Mutex<HashSet<RobotId>>` for the offline set.
+The monitor now uses a single lock: `Mutex<HealthState>`, where `HealthState` contains both `heartbeats: HashMap<RobotId, Instant>` and `offline: HashSet<RobotId>`. This keeps heartbeat updates and offline detection consistent without cross-lock coordination.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Unregistered
     Unregistered --> Online: register_robot() or heartbeat()
-    Online --> Online: heartbeat() — write-locks heartbeats, clears offline mark
-    Online --> Offline: detect_offline() — read-locks heartbeats to scan, then write-locks offline set
+    Online --> Online: heartbeat() — lock state, update timestamp, clear offline mark
+    Online --> Offline: detect_offline() — lock state, scan timestamps, mark overdue robots
     Offline --> Online: heartbeat() — clears offline mark
 ```
 
@@ -141,8 +141,8 @@ stateDiagram-v2
 ```mermaid
 flowchart TD
     A["Start benchmark/stress run"] --> B{"offline-demo flag?"}
-    B -- "no" --> C["All robots send heartbeats throughout"]
-    B -- "yes" --> D["Robot 0 stops heartbeats after tasks_per_robot/2"]
+    B -- "no" --> C["All robots send heartbeats throughout\n(no background monitor thread spawned)"]
+    B -- "yes" --> D["Spawn background monitor thread\nRobot 0 stops heartbeats after tasks_per_robot/2"]
     C --> E["Workers finish all tasks"]
     D --> E
     E --> F["wait_for_offline(any, 500ms timeout, 1000ms max)"]
@@ -154,3 +154,4 @@ Interpretation:
 
 - In demo mode, the offline target is deterministic (robot 1 stops after 2 of 3 tasks).
 - In benchmark/stress offline mode, robot 0 stops heartbeats at the halfway point; `offline_robots >= 1` is expected and acceptable at run end.
+- In normal benchmark/stress mode, validation still checks correctness, but duplicate-task detection now uses a fixed seen-table keyed by task id instead of a per-task channel.

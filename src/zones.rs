@@ -1,13 +1,13 @@
 //! Zone access control: ensures exclusive occupancy per zone.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Condvar, Mutex};
 
 use crate::types::{RobotId, ZoneId};
 
 /// Tracks zone ownership and blocks until zones become available.
 pub struct ZoneAccess {
-    occupied: Mutex<HashMap<ZoneId, RobotId>>,
+    occupied: Mutex<Vec<Option<RobotId>>>,
     condvars: Vec<Condvar>,
 }
 
@@ -17,7 +17,7 @@ impl ZoneAccess {
     pub fn new_with_zones(n: usize) -> Self {
         let condvars = (0..=n).map(|_| Condvar::new()).collect();
         Self {
-            occupied: Mutex::new(HashMap::new()),
+            occupied: Mutex::new(vec![None; n + 1]),
             condvars,
         }
     }
@@ -30,11 +30,11 @@ impl ZoneAccess {
 
     /// Acquire the zone for a robot, blocking until the zone is free.
     pub fn acquire(&self, zone: ZoneId, robot: RobotId) {
-        let idx = zone as usize % self.condvars.len();
+        let idx = self.zone_index(zone);
         let mut guard = self.occupied.lock().expect("zone mutex poisoned");
         loop {
-            if !guard.contains_key(&zone) {
-                guard.insert(zone, robot);
+            if guard[idx].is_none() {
+                guard[idx] = Some(robot);
                 return;
             }
             // Wait releases the lock; on wake, re-check the condition.
@@ -44,11 +44,12 @@ impl ZoneAccess {
 
     /// Release a zone; returns false if the caller is not the owner.
     pub fn release(&self, zone: ZoneId, robot: RobotId) -> bool {
-        let idx = zone as usize % self.condvars.len();
+        let idx = self.zone_index(zone);
         let mut guard = self.occupied.lock().expect("zone mutex poisoned");
-        match guard.get(&zone) {
-            Some(owner) if *owner == robot => {
-                guard.remove(&zone);
+        match guard[idx] {
+            Some(owner) if owner == robot => {
+                guard[idx] = None;
+                drop(guard);
                 // Wake one contender so the next robot can acquire the zone.
                 self.condvars[idx].notify_one();
                 true
@@ -80,7 +81,19 @@ impl ZoneAccess {
     /// Snapshot of zones that are currently occupied.
     pub fn occupied_zones(&self) -> HashSet<ZoneId> {
         let guard = self.occupied.lock().expect("zone mutex poisoned");
-        guard.keys().copied().collect()
+        guard
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter_map(|(zone, owner)| owner.map(|_| zone as ZoneId))
+            .collect()
+    }
+
+    fn zone_index(&self, zone: ZoneId) -> usize {
+        let idx = zone as usize;
+        debug_assert!(idx > 0, "zones are 1-indexed");
+        debug_assert!(idx < self.condvars.len(), "zone out of range: {zone}");
+        idx
     }
 }
 
@@ -140,6 +153,29 @@ mod tests {
 
         assert!(!violation.load(Ordering::SeqCst));
         assert_eq!(max_occupancy.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn occupied_zones_lists_current_owners() {
+        let access = ZoneAccess::new_with_zones(3);
+        access.acquire(1, 10);
+        access.acquire(3, 11);
+
+        let occupied = access.occupied_zones();
+        assert!(occupied.contains(&1));
+        assert!(occupied.contains(&3));
+        assert_eq!(occupied.len(), 2);
+
+        assert!(access.release(1, 10));
+        assert!(access.release(3, 11));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "zone out of range")]
+    fn acquire_out_of_range_zone_panics_in_debug() {
+        let access = ZoneAccess::new_with_zones(2);
+        access.acquire(3, 1);
     }
 
     #[cfg(debug_assertions)]
